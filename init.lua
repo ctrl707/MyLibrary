@@ -989,12 +989,8 @@ function Library._TabMethods:CreateDropdown(config)
     list.CanvasSize         = UDim2.new(0,0,0,#options*28)
     list.Visible            = false
     list.ZIndex             = 10
+    list.BackgroundColor3   = self._CurTheme().SB
     list.Parent             = listW
-    self._RegSidebar(list and false)  -- not registered as sidebar
-    
-    local th0 = self._CurTheme()
-    list.BackgroundColor3 = th0.SB
-    self._RegPanel(list)
     
     local listCorner = Instance.new("UICorner")
     listCorner.Parent = list
@@ -1043,14 +1039,12 @@ function Library._TabMethods:CreateDropdown(config)
             local capturedI = i
             itemBtn.MouseButton1Click:Connect(function()
                 DropdownObj:Set(options[capturedI])
-                -- close
                 open = false
                 Library._Utils.Tween(list, {Size=UDim2.new(1,0,0,0)}, 0.15)
                 task.delay(0.15, function()
                     list.Visible = false
                     listW.Size   = UDim2.new(1,0,0,0)
                 end)
-                btn.Text = "▼  "..name..": "..tostring(options[selectedIdx])
             end)
         end
         list.CanvasSize = UDim2.new(0,0,0,#options*28)
@@ -1062,14 +1056,14 @@ function Library._TabMethods:CreateDropdown(config)
                 selectedIdx = i
                 btn.Text = (open and "▲  " or "▼  ")..name..": "..tostring(opt)
                 if flag then Library.Flags[flag] = opt end
+                local th = Tab._CurTheme()
                 for _, ib in ipairs(itemBtns) do
-                    local th = self._CurTheme()
                     ib.BackgroundColor3 = (ib:GetAttribute("Idx") == i) and th.Panel or th.Field
                 end
                 if config.Callback then
                     task.spawn(function()
                         local ok, err = pcall(config.Callback, opt)
-                        if not ok then warn("[DivaUI] Dropdown callback error: "..tostring(err)) end
+                        if not ok then warn("[NovaUI] Dropdown callback error: "..tostring(err)) end
                     end)
                 end
                 return
@@ -1091,6 +1085,8 @@ function Library._TabMethods:CreateDropdown(config)
         btn.Text = "▼  "..name..": "..tostring(options[selectedIdx] or "None")
         if flag then Library.Flags[flag] = options[selectedIdx] end
     end
+    
+    local Tab = self
     
     btn.MouseButton1Click:Connect(function()
         open = not open

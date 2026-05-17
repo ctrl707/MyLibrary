@@ -109,7 +109,7 @@ Misc:CreateKeybind({
     Name = "Toggle UI",
     Default = Enum.KeyCode.RightControl,
     Callback = function()
-        Window.MainFrame.Visible = not Window.MainFrame.Visible
+        Window.ScreenGui.Enabled = not Window.ScreenGui.Enabled
     end
 })
 

@@ -109,6 +109,21 @@ Library.WindowSizes = {
     XLarge = {W=850, H=560},
 }
 
+Library.HighlightColors = {
+    {Name="Black",  Color=Color3.fromRGB(0,0,0)},
+    {Name="Gray",   Color=Color3.fromRGB(128,128,128)},
+    {Name="White",  Color=Color3.fromRGB(255,255,255)},
+    {Name="Red",    Color=Color3.fromRGB(255,0,0)},
+    {Name="Orange", Color=Color3.fromRGB(255,127,0)},
+    {Name="Yellow", Color=Color3.fromRGB(255,255,0)},
+    {Name="Lime",   Color=Color3.fromRGB(0,255,0)},
+    {Name="Cyan",   Color=Color3.fromRGB(0,255,255)},
+    {Name="Blue",   Color=Color3.fromRGB(0,0,255)},
+    {Name="Purple", Color=Color3.fromRGB(127,0,255)},
+    {Name="Pink",   Color=Color3.fromRGB(255,0,255)},
+    {Name="Rose",   Color=Color3.fromRGB(255,0,127)},
+}
+
 Library.CornerRadii   = {0, 2, 4, 6, 8, 12}
 Library.OpacityLevels = {
     {Name="Solid",   Value=0},

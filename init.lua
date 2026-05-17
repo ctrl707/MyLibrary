@@ -1290,9 +1290,11 @@ function Library._TabMethods:CreateColorPicker(config)
 end
 
 --==[ CreateKeybind ]==--
+--==[ CreateKeybind ]==--
 function Library._TabMethods:CreateKeybind(config)
     config = config or {}
     
+    local TabRef  = self
     local name    = config.Name or "Keybind"
     local default = config.Default or Enum.KeyCode.E
     local flag    = config.Flag or name
@@ -1300,7 +1302,7 @@ function Library._TabMethods:CreateKeybind(config)
     local currentKey = default
     local listening  = false
     
-    local w = CreateWrap(self.Page, name, 32)
+    local w = CreateWrap(TabRef.Page, name, 32)
     
     local btn = Instance.new("TextButton")
     btn.Name     = "Keybind"
@@ -1308,11 +1310,11 @@ function Library._TabMethods:CreateKeybind(config)
     btn.Text     = name.." : ["..tostring(currentKey.Name).."]"
     btn.TextSize = 12
     btn.Parent   = w
-    self._RegBtn(btn, false)
+    TabRef._RegBtn(btn, false)
     
     local bc = Instance.new("UICorner")
     bc.Parent = btn
-    self._RegCorner(bc)
+    TabRef._RegCorner(bc)
     
     local KeybindObj = {Instance = btn}
     
@@ -1326,7 +1328,7 @@ function Library._TabMethods:CreateKeybind(config)
     btn.MouseButton1Click:Connect(function()
         if listening then return end
         listening = true
-        btn.Text = name.." : [Press a key...]"
+        btn.Text = name.." : [Press a key... ESC to cancel]"
         
         local conn
         conn = Services.UserInputService.InputBegan:Connect(function(input, gp)
@@ -1348,20 +1350,24 @@ function Library._TabMethods:CreateKeybind(config)
         end)
     end)
     
-    -- Listen for the keybind press globally
+    -- Listen for the keybind press globally (с защитой!)
     Services.UserInputService.InputBegan:Connect(function(input, gp)
-        if gp or listening then return end
+        -- ⚠️ ВАЖНО: если пользователь печатает в TextBox — игнорируем
+        if gp then return end
+        if listening then return end
         if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+        if input.KeyCode == Enum.KeyCode.Unknown then return end
+        
         if input.KeyCode == currentKey and config.Callback then
             task.spawn(function()
                 local ok, err = pcall(config.Callback, currentKey)
-                if not ok then warn("[DivaUI] Keybind callback error: "..tostring(err)) end
+                if not ok then warn("[NovaUI] Keybind callback error: "..tostring(err)) end
             end)
         end
     end)
     
     if flag then Library.Flags[flag] = currentKey end
-    self._ApplyTheme()
+    TabRef._ApplyTheme()
     return KeybindObj
 end
 

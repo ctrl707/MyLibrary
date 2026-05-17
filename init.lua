@@ -945,8 +945,11 @@ function Library._TabMethods:CreateSlider(config)
 end
 
 --==[ CreateDropdown ]==--
+--==[ CreateDropdown ]==--
 function Library._TabMethods:CreateDropdown(config)
     config = config or {}
+    
+    local TabRef = self  -- сохраняем ссылку на Tab
     
     local name    = config.Name or "Dropdown"
     local options = config.Options or {}
@@ -958,9 +961,8 @@ function Library._TabMethods:CreateDropdown(config)
         if opt == default then selectedIdx = i break end
     end
     
-    local w = CreateWrap(self.Page, name, 32)
+    local w = CreateWrap(TabRef.Page, name, 32)
     
-    -- Main button
     local btn = Instance.new("TextButton")
     btn.Name             = "Dropdown"
     btn.Size             = UDim2.new(1,0,1,0)
@@ -969,18 +971,17 @@ function Library._TabMethods:CreateDropdown(config)
     btn.TextXAlignment   = Enum.TextXAlignment.Left
     btn.BorderSizePixel  = 0
     btn.Parent           = w
-    self._RegField(btn)
+    TabRef._RegField(btn)
     
     local btnCorner = Instance.new("UICorner")
     btnCorner.Parent = btn
-    self._RegCorner(btnCorner)
+    TabRef._RegCorner(btnCorner)
     
     local btnPad = Instance.new("UIPadding")
     btnPad.PaddingLeft = UDim.new(0, 8)
     btnPad.Parent      = btn
     
-    -- List container (separate wrap so it pushes other elements)
-    local listW = CreateWrap(self.Page, name.."_List", 0)
+    local listW = CreateWrap(TabRef.Page, name.."_List", 0)
     
     local list = Instance.new("ScrollingFrame")
     list.Size               = UDim2.new(1,0,0,0)
@@ -989,16 +990,15 @@ function Library._TabMethods:CreateDropdown(config)
     list.CanvasSize         = UDim2.new(0,0,0,#options*28)
     list.Visible            = false
     list.ZIndex             = 10
-    list.BackgroundColor3   = self._CurTheme().SB
+    list.BackgroundColor3   = TabRef._CurTheme().SB
     list.Parent             = listW
     
     local listCorner = Instance.new("UICorner")
     listCorner.Parent = list
-    self._RegCorner(listCorner)
+    TabRef._RegCorner(listCorner)
     
     local itemBtns = {}
     local open     = false
-    
     local DropdownObj = {Instance = btn}
     
     local function rebuildItems()
@@ -1007,8 +1007,8 @@ function Library._TabMethods:CreateDropdown(config)
         end
         itemBtns = {}
         
-        local th = self._CurTheme()
-        local fn = self._CurFont()
+        local th = TabRef._CurTheme()
+        local fn = TabRef._CurFont()
         
         for i, opt in ipairs(options) do
             local itemBtn = Instance.new("TextButton")
@@ -1056,7 +1056,7 @@ function Library._TabMethods:CreateDropdown(config)
                 selectedIdx = i
                 btn.Text = (open and "▲  " or "▼  ")..name..": "..tostring(opt)
                 if flag then Library.Flags[flag] = opt end
-                local th = Tab._CurTheme()
+                local th = TabRef._CurTheme()
                 for _, ib in ipairs(itemBtns) do
                     ib.BackgroundColor3 = (ib:GetAttribute("Idx") == i) and th.Panel or th.Field
                 end
@@ -1086,8 +1086,6 @@ function Library._TabMethods:CreateDropdown(config)
         if flag then Library.Flags[flag] = options[selectedIdx] end
     end
     
-    local Tab = self
-    
     btn.MouseButton1Click:Connect(function()
         open = not open
         if open then
@@ -1108,7 +1106,7 @@ function Library._TabMethods:CreateDropdown(config)
     
     rebuildItems()
     if flag then Library.Flags[flag] = options[selectedIdx] end
-    self._ApplyTheme()
+    TabRef._ApplyTheme()
     
     return DropdownObj
 end

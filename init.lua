@@ -3,7 +3,7 @@
     ║                    DivaUI Library                        ║
     ║              Modern Roblox UI Library                    ║
     ║  Author : ctrl707                                        ║
-    ║  Version: 1.1.0                                          ║
+    ║  Version: 1.1.1                                          ║
     ║  GitHub : github.com/ctrl707/MyLibrary                   ║
     ╚══════════════════════════════════════════════════════════╝
 ]]
@@ -17,7 +17,7 @@ end
 
 local Library = {}
 Library.__index = Library
-Library.Version = "1.1.0"
+Library.Version = "1.1.1"
 Library.Flags   = {}
 Library.Windows = {}
 
@@ -455,7 +455,7 @@ function Library:CreateWindow(config)
     end
     R.RefreshTabs = RefreshTabs
     Window.RefreshTabs = RefreshTabs
-    
+
     ColBtn.MouseButton1Click:Connect(function()
         if Window.Collapsed then
             Window.Collapsed = false
@@ -576,7 +576,7 @@ function Library:CreateWindow(config)
         return Tab
     end
     
-    -- CreateCustomizePanel (привязан к окну)
+    -- CreateCustomizePanel
     function Window:CreateCustomizePanel()
         if self._CustomizePanel then return self._CustomizePanel end
         
@@ -1057,30 +1057,43 @@ function Library._TabMethods:CreateButton(config)
     return ButtonObj
 end
 
---==[ CreateToggle ]==--
+--==[ CreateToggle (FIXED) ]==--
 function Library._TabMethods:CreateToggle(config)
     config = config or {}
-    local state = config.Default or false
+    local state = config.Default == true -- 🔥 FIX: только true считается включённым
     local flag  = config.Flag or config.Name
+    local TabRef = self
+    
     local w = CreateWrap(self.Page, config.Name or "Toggle", 32)
     local btn = Instance.new("TextButton")
-    btn.Name = "Toggle" btn.Size = UDim2.new(1,0,1,0)
+    btn.Name = "Toggle"
+    btn.Size = UDim2.new(1,0,1,0)
     btn.Text = (config.Name or "Toggle")..": "..(state and "ON" or "OFF")
-    btn.TextSize = 13 btn.Parent = w
+    btn.TextSize = 13
+    btn.Parent = w
+    
+    -- Регистрируем с функцией isOnFn для ApplyTheme
     self._RegBtn(btn, true, function() return state end)
+    
     local bc = Instance.new("UICorner") bc.Parent = btn self._RegCorner(bc)
+    
+    -- 🔥 FIX: функция которая обновляет ВСЁ — текст, цвет, шрифт
     local function UpdateVisual()
-        local th = self._CurTheme()
+        local th = TabRef._CurTheme()
+        local fn = TabRef._CurFont()
         local bg = state and th.ButtonOn or th.ButtonOff
         btn.BackgroundColor3 = bg
-        btn.TextColor3       = Library._Utils.ContrastText(bg)
+        btn.TextColor3       = ContrastText(bg)
+        btn.Font             = fn.Semi
         btn.Text             = (config.Name or "Toggle")..": "..(state and "ON" or "OFF")
     end
+    
     local ToggleObj = {Instance = btn}
+    
     function ToggleObj:Set(value, silent)
         state = value and true or false
         if flag then Library.Flags[flag] = state end
-        UpdateVisual()
+        UpdateVisual() -- 🔥 ВАЖНО: вызывается СРАЗУ после изменения state
         if not silent and config.Callback then
             task.spawn(function()
                 local ok, err = pcall(config.Callback, state)
@@ -1088,14 +1101,28 @@ function Library._TabMethods:CreateToggle(config)
             end)
         end
     end
+    
     function ToggleObj:Get() return state end
-    btn.MouseButton1Click:Connect(function() ToggleObj:Set(not state) end)
+    
+    btn.MouseButton1Click:Connect(function()
+        ToggleObj:Set(not state)
+    end)
+    
     if flag then Library.Flags[flag] = state end
+    
+    -- 🔥 FIX: применяем визуал СРАЗУ после создания (без вызова ApplyTheme)
     UpdateVisual()
-    self._ApplyTheme()
-    if config.Default ~= nil and config.Callback then
+    
+    -- 🔥 FIX: НЕ вызываем callback при инициализации если Default не задан явно
+    if config.Default == true and config.Callback then
         task.spawn(function() pcall(config.Callback, state) end)
     end
+    
+    -- 🔥 Регистрируем hook для обновления при смене темы
+    if TabRef.Window and TabRef.Window._RefreshHooks then
+        table.insert(TabRef.Window._RefreshHooks, UpdateVisual)
+    end
+    
     return ToggleObj
 end
 
@@ -1398,7 +1425,7 @@ function Library._TabMethods:CreateColorPicker(config)
     return ColorPickerObj
 end
 
---==[ CreateSwatchRow — компактная палитра без лейбла ]==--
+--==[ CreateSwatchRow ]==--
 function Library._TabMethods:CreateSwatchRow(config)
     config = config or {}
     local TabRef = self
@@ -1525,7 +1552,7 @@ function Library._TabMethods:CreateKeybind(config)
     return KeybindObj
 end
 
---==[ CreatePlayerList — список игроков с аватарками (для Fling) ]==--
+--==[ CreatePlayerList ]==--
 function Library._TabMethods:CreatePlayerList(config)
     config = config or {}
     local TabRef = self
@@ -1536,8 +1563,8 @@ function Library._TabMethods:CreatePlayerList(config)
     container.Size = UDim2.new(1,0,0,0)
     container.Parent = TabRef.Page
     
-    local selected = {}   -- {[name] = player}
-    local entries  = {}   -- {[name] = {Frame, CB, NameLbl, Avatar}}
+    local selected = {}
+    local entries  = {}
     local Obj = {Instance = container, Selected = selected, Entries = entries}
     
     function Obj:GetSelectedCount()
@@ -1674,16 +1701,15 @@ function Library._TabMethods:CreatePlayerList(config)
     return Obj
 end
 
---==[ CreateAntiThingManager — менеджер anti-states ]==--
+--==[ CreateAntiThingManager ]==--
 function Library._TabMethods:CreateAntiThingManager(config)
     config = config or {}
     local TabRef = self
-    local items = config.Items or {}  -- {{Key, Label, ...userData}, ...}
-    local states = config.States or {} -- {[Key] = true/false}
+    local items = config.Items or {}
+    local states = config.States or {}
     
     local Obj = {Items=items, States=states, Added={}}
     
-    -- Dropdown for selecting
     local selIdx = 1
     
     local dropW = CreateWrap(TabRef.Page, "AntiDrop", 32)
@@ -1756,7 +1782,6 @@ function Library._TabMethods:CreateAntiThingManager(config)
         end
     end)
     
-    -- Add button
     local addW = CreateWrap(TabRef.Page, "AntiAdd", 32)
     local addBtn = Instance.new("TextButton")
     addBtn.Size = UDim2.new(1,0,1,0)
@@ -1767,14 +1792,12 @@ function Library._TabMethods:CreateAntiThingManager(config)
     Instance.new("UICorner",addBtn).CornerRadius = UDim.new(0,4)
     TabRef._RegBtn(addBtn, false)
     
-    -- Separator
     local sepW = CreateWrap(TabRef.Page, "AntiSep", 10)
     local sep = Instance.new("Frame")
     sep.Size = UDim2.new(1,0,0,1) sep.Position = UDim2.new(0,0,0.5,0)
     sep.BorderSizePixel = 0 sep.Parent = sepW
     TabRef._RegSeparator(sep)
     
-    -- Label "Added"
     local addedLblW = CreateWrap(TabRef.Page, "AntiAddedLbl", 16)
     local addedLbl = Instance.new("TextLabel")
     addedLbl.Size = UDim2.new(1,0,1,0) addedLbl.BackgroundTransparency = 1
@@ -1782,7 +1805,6 @@ function Library._TabMethods:CreateAntiThingManager(config)
     addedLbl.TextXAlignment = Enum.TextXAlignment.Left addedLbl.Parent = addedLblW
     TabRef._RegText(addedLbl, false)
     
-    -- Container for added items
     local listContainer = Instance.new("Frame")
     listContainer.BackgroundTransparency = 1
     listContainer.Size = UDim2.new(1,0,0,0)
@@ -1965,7 +1987,6 @@ function Library:CreateMobileButton(config)
     return MobileBtnObj
 end
 
---==[ Destroy ]==--
 function Library:Destroy()
     for _, win in ipairs(self.Windows) do pcall(function() win:Destroy() end) end
     self.Windows = {} self.Flags = {}

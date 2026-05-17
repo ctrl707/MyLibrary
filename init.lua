@@ -175,6 +175,7 @@ local function CreateThemeRegistry()
 end
 
 --==[ CreateWindow ]==--
+--==[ CreateWindow ]==--
 function Library:CreateWindow(config)
     config = config or {}
     
@@ -235,6 +236,24 @@ function Library:CreateWindow(config)
         Field=RegField, Track=RegTrack, Slider=RegSlider, Separator=RegSeparator,
         Scroll=RegScroll, Text=RegText, Corner=RegCorner, Btn=RegBtn,
     }
+    
+    -- 🔥 НОВАЯ ФУНКЦИЯ: создание UIShadow с защитой от старых клиентов
+    local function CreateUIShadow(parent, opts)
+        opts = opts or {}
+        local ok, shadow = pcall(function()
+            local s = Instance.new("UIShadow")
+            s.BlurRadius   = opts.Blur or 20
+            s.Color        = opts.Color or Color3.fromRGB(0,0,0)
+            s.Offset       = opts.Offset or Vector2.new(0, 4)
+            s.Spread       = opts.Spread or Vector2.new(0, 0)
+            s.Transparency = opts.Transparency or 0.3
+            s.ZIndex       = opts.ZIndex or -1
+            s.Parent       = parent
+            return s
+        end)
+        return ok and shadow or nil
+    end
+    Window.CreateUIShadow = CreateUIShadow -- доступно снаружи
     
     function Window:ApplyTheme()
         local th = CurTheme()
@@ -331,18 +350,6 @@ function Library:CreateWindow(config)
     SG.ZIndexBehavior = Enum.ZIndexBehavior.Global
     Window.ScreenGui  = SG
     
-    local Shadow = Instance.new("ImageLabel")
-    Shadow.Name                   = GenStr(5)
-    Shadow.Image                  = "rbxassetid://5554236805"
-    Shadow.BackgroundTransparency = 1
-    Shadow.ZIndex                 = 0
-    Shadow.ScaleType              = Enum.ScaleType.Slice
-    Shadow.SliceCenter            = Rect.new(10,10,20,20)
-    Shadow.ImageColor3            = Color3.new(0,0,0)
-    Shadow.ImageTransparency      = 0.5
-    Shadow.Parent                 = SG
-    Window.Shadow = Shadow
-    
     local sz = CurSize()
     local th = CurTheme()
     
@@ -356,7 +363,7 @@ function Library:CreateWindow(config)
     MF.BorderSizePixel  = 0
     MF.Active           = true
     MF.Draggable        = true
-    MF.ClipsDescendants = true
+    MF.ClipsDescendants = false  -- 🔥 ВАЖНО: false чтобы тень не обрезалась
     MF.ZIndex           = 1
     MF.Parent           = SG
     RegBG(MF)
@@ -367,21 +374,42 @@ function Library:CreateWindow(config)
     mfCorner.Parent = MF
     RegCorner(mfCorner)
     
-    MF:GetPropertyChangedSignal("Position"):Connect(function()
-        Shadow.Position = MF.Position - UDim2.new(0,10,0,10)
-    end)
-    MF:GetPropertyChangedSignal("Size"):Connect(function()
-        Shadow.Size = MF.Size + UDim2.new(0,20,0,20)
-    end)
-    Shadow.Position = MF.Position - UDim2.new(0,10,0,10)
-    Shadow.Size     = MF.Size + UDim2.new(0,20,0,20)
+    -- 🔥 ГЛАВНАЯ ТЕНЬ ОКНА через UIShadow
+    Window.MainShadow = CreateUIShadow(MF, {
+        Blur         = 30,
+        Color        = Color3.fromRGB(0,0,0),
+        Offset       = Vector2.new(0, 10),
+        Spread       = Vector2.new(2, 2),
+        Transparency = 0.35,
+        ZIndex       = -1,
+    })
+    
+    -- Внутренний контейнер с ClipsDescendants для контента
+    local InnerClip = Instance.new("Frame")
+    InnerClip.Name = "InnerClip"
+    InnerClip.Size = UDim2.new(1, 0, 1, 0)
+    InnerClip.BackgroundTransparency = 1
+    InnerClip.BorderSizePixel = 0
+    InnerClip.ClipsDescendants = true
+    InnerClip.ZIndex = 1
+    InnerClip.Parent = MF
+    local innerCorner = Instance.new("UICorner") innerCorner.Parent = InnerClip RegCorner(innerCorner)
     
     local TopBar = Instance.new("Frame")
     TopBar.Size            = UDim2.new(1,0,0,30)
     TopBar.BorderSizePixel = 0
     TopBar.ZIndex          = 3
-    TopBar.Parent          = MF
+    TopBar.Parent          = InnerClip
     RegTopBar(TopBar)
+    
+    -- 🔥 Тень для TopBar (мягкая, снизу)
+    CreateUIShadow(TopBar, {
+        Blur         = 8,
+        Offset       = Vector2.new(0, 2),
+        Spread       = Vector2.new(0, 0),
+        Transparency = 0.65,
+        ZIndex       = -1,
+    })
     
     local Title = Instance.new("TextLabel")
     Title.Size                   = UDim2.new(1,-80,1,0)
@@ -409,16 +437,25 @@ function Library:CreateWindow(config)
     Sidebar.Position        = UDim2.new(0,0,0,30)
     Sidebar.BorderSizePixel = 0
     Sidebar.ZIndex          = 2
-    Sidebar.Parent          = MF
+    Sidebar.Parent          = InnerClip
     RegSidebar(Sidebar)
     Window.Sidebar = Sidebar
+    
+    -- 🔥 Тень для Sidebar (справа)
+    CreateUIShadow(Sidebar, {
+        Blur         = 6,
+        Offset       = Vector2.new(2, 0),
+        Spread       = Vector2.new(0, 0),
+        Transparency = 0.75,
+        ZIndex       = -1,
+    })
     
     local SBSep = Instance.new("Frame")
     SBSep.Size            = UDim2.new(0,1,1,-30)
     SBSep.Position        = UDim2.new(0,130,0,30)
     SBSep.BorderSizePixel = 0
     SBSep.ZIndex          = 3
-    SBSep.Parent          = MF
+    SBSep.Parent          = InnerClip
     RegSeparator(SBSep)
     Window.SBSep = SBSep
     
@@ -426,7 +463,7 @@ function Library:CreateWindow(config)
     CA.Size                   = UDim2.new(1,-131,1,-30)
     CA.Position               = UDim2.new(0,131,0,30)
     CA.BackgroundTransparency = 1
-    CA.Parent                 = MF
+    CA.Parent                 = InnerClip
     Window.ContentArea = CA
     
     local sbl = Instance.new("UIListLayout")
@@ -462,7 +499,6 @@ function Library:CreateWindow(config)
             ColBtn.Text = "-"
             local sz2 = CurSize()
             Tween(MF, {Size=UDim2.new(0,sz2.W,0,sz2.H)}, 0.3)
-            Tween(Shadow, {Size=UDim2.new(0,sz2.W+20,0,sz2.H+20)}, 0.3)
             task.delay(0.2, function()
                 if not Window.Collapsed then
                     Sidebar.Visible = true
@@ -485,7 +521,6 @@ function Library:CreateWindow(config)
             SBSep.Visible   = false
             CA.Visible      = false
             Tween(MF, {Size=UDim2.new(0,CurSize().W,0,30)}, 0.3)
-            Tween(Shadow, {Size=UDim2.new(0,CurSize().W+20,0,50)}, 0.3)
         end
     end)
     
@@ -561,6 +596,7 @@ function Library:CreateWindow(config)
         Tab._CurTheme     = CurTheme
         Tab._CurFont      = CurFont
         Tab._ApplyTheme   = function() Window:ApplyTheme() end
+        Tab._CreateShadow = CreateUIShadow -- 🔥 доступ к функции теней для табов
         
         table.insert(self.Tabs, Tab)
         
@@ -585,6 +621,7 @@ function Library:CreateWindow(config)
         local SB      = Wn.Sidebar
         local SBSep2  = Wn.SBSep
         local CA2     = Wn.ContentArea
+        local InnerClipRef = MF2:FindFirstChild("InnerClip") or MF2
         
         local CustPanel = Instance.new("Frame")
         CustPanel.Name            = "CustomizePanel"
@@ -593,8 +630,17 @@ function Library:CreateWindow(config)
         CustPanel.BorderSizePixel = 0
         CustPanel.ZIndex          = 20
         CustPanel.Visible         = false
-        CustPanel.Parent          = MF2
+        CustPanel.Parent          = InnerClipRef
         RegPanel(CustPanel)
+        
+        -- 🔥 Тень для CustomizePanel
+        CreateUIShadow(CustPanel, {
+            Blur         = 12,
+            Offset       = Vector2.new(3, 0),
+            Spread       = Vector2.new(0, 0),
+            Transparency = 0.55,
+            ZIndex       = -1,
+        })
         
         local CustSep = Instance.new("Frame")
         CustSep.Size            = UDim2.new(0,1,1,-30)
@@ -602,7 +648,7 @@ function Library:CreateWindow(config)
         CustSep.BorderSizePixel = 0
         CustSep.ZIndex          = 21
         CustSep.Visible         = false
-        CustSep.Parent          = MF2
+        CustSep.Parent          = InnerClipRef
         RegSeparator(CustSep)
         
         local CustScroll = Instance.new("ScrollingFrame")
@@ -931,7 +977,6 @@ function Library:CreateWindow(config)
     table.insert(Library.Windows, Window)
     return Window
 end
-
 --==[ Tab methods table ]==--
 Library._TabMethods = {}
 

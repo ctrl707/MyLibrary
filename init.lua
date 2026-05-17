@@ -3,7 +3,7 @@
     ║                    DivaUI Library                        ║
     ║              Modern Roblox UI Library                    ║
     ║  Author : ctrl707                                        ║
-    ║  Version: 1.1.1                                          ║
+    ║  Version: 1.1.2                                          ║
     ║  GitHub : github.com/ctrl707/MyLibrary                   ║
     ╚══════════════════════════════════════════════════════════╝
 ]]
@@ -17,7 +17,7 @@ end
 
 local Library = {}
 Library.__index = Library
-Library.Version = "1.1.1"
+Library.Version = "1.1.2"
 Library.Flags   = {}
 Library.Windows = {}
 
@@ -1057,10 +1057,10 @@ function Library._TabMethods:CreateButton(config)
     return ButtonObj
 end
 
---==[ CreateToggle (FIXED) ]==--
+--==[ CreateToggle (FIXED v3) ]==--
 function Library._TabMethods:CreateToggle(config)
     config = config or {}
-    local state = config.Default == true -- 🔥 FIX: только true считается включённым
+    local state = config.Default == true
     local flag  = config.Flag or config.Name
     local TabRef = self
     
@@ -1072,12 +1072,10 @@ function Library._TabMethods:CreateToggle(config)
     btn.TextSize = 13
     btn.Parent = w
     
-    -- Регистрируем с функцией isOnFn для ApplyTheme
     self._RegBtn(btn, true, function() return state end)
     
     local bc = Instance.new("UICorner") bc.Parent = btn self._RegCorner(bc)
     
-    -- 🔥 FIX: функция которая обновляет ВСЁ — текст, цвет, шрифт
     local function UpdateVisual()
         local th = TabRef._CurTheme()
         local fn = TabRef._CurFont()
@@ -1093,7 +1091,7 @@ function Library._TabMethods:CreateToggle(config)
     function ToggleObj:Set(value, silent)
         state = value and true or false
         if flag then Library.Flags[flag] = state end
-        UpdateVisual() -- 🔥 ВАЖНО: вызывается СРАЗУ после изменения state
+        UpdateVisual()
         if not silent and config.Callback then
             task.spawn(function()
                 local ok, err = pcall(config.Callback, state)
@@ -1110,15 +1108,16 @@ function Library._TabMethods:CreateToggle(config)
     
     if flag then Library.Flags[flag] = state end
     
-    -- 🔥 FIX: применяем визуал СРАЗУ после создания (без вызова ApplyTheme)
+    -- 🔥 ВАЖНО: применяем визуал сразу + через render step (на случай если ApplyTheme перезапишет)
     UpdateVisual()
+    task.defer(UpdateVisual)
+    task.delay(0.1, UpdateVisual)
     
-    -- 🔥 FIX: НЕ вызываем callback при инициализации если Default не задан явно
     if config.Default == true and config.Callback then
         task.spawn(function() pcall(config.Callback, state) end)
     end
     
-    -- 🔥 Регистрируем hook для обновления при смене темы
+    -- Регистрируем hook для обновления при смене темы
     if TabRef.Window and TabRef.Window._RefreshHooks then
         table.insert(TabRef.Window._RefreshHooks, UpdateVisual)
     end
@@ -1126,7 +1125,7 @@ function Library._TabMethods:CreateToggle(config)
     return ToggleObj
 end
 
---==[ CreateSlider ]==--
+--==[ CreateSlider (FIXED) ]==--
 function Library._TabMethods:CreateSlider(config)
     config = config or {}
     local name = config.Name or "Slider"
@@ -1168,7 +1167,8 @@ function Library._TabMethods:CreateSlider(config)
     
     local currentValue = init
     local drag = false
-    local SliderObj = {Instance = w}
+    local TabRef = self
+    local SliderObj = {Instance = w, Fill = fl, Label = lbl, Min = mn, Max = mx, Fmt = fmt}
     
     local function setValue(v, fireCallback)
         v = math.clamp(v, mn, mx) v = ff(v) currentValue = v
@@ -1183,7 +1183,12 @@ function Library._TabMethods:CreateSlider(config)
             end)
         end
     end
-    function SliderObj:Set(v, silent) setValue(v, not silent) end
+    
+    -- 🔥 Set метод теперь правильно обновляет fill и label
+    function SliderObj:Set(v, silent)
+        if type(v) ~= "number" then return end
+        setValue(v, not silent)
+    end
     function SliderObj:Get() return currentValue end
     
     local function upd(input)
@@ -1206,7 +1211,7 @@ function Library._TabMethods:CreateSlider(config)
     return SliderObj
 end
 
---==[ CreateDropdown ]==--
+--==[ CreateDropdown (FIXED) ]==--
 function Library._TabMethods:CreateDropdown(config)
     config = config or {}
     local TabRef = self
@@ -1277,6 +1282,7 @@ function Library._TabMethods:CreateDropdown(config)
         for i, opt in ipairs(options) do
             if opt == value then
                 selectedIdx = i
+                -- 🔥 FIX: обновляем текст кнопки
                 btn.Text = (open and "▲  " or "▼  ")..name..": "..tostring(opt)
                 if flag then Library.Flags[flag] = opt end
                 local th = TabRef._CurTheme()

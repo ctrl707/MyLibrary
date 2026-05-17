@@ -1,7 +1,7 @@
 --==[ Anti double-load ]==--
-if shared.__NovaUI_Destroy then
-    pcall(shared.__NovaUI_Destroy)
-    shared.__NovaUI_Destroy = nil
+if shared.__DivaUI_Destroy then
+    pcall(shared.__DivaUI_Destroy)
+    shared.__DivaUI_Destroy = nil
     task.wait(0.2)
 end
 
@@ -123,7 +123,7 @@ function Library:Notify(config)
     config = config or {}
     pcall(function()
         Services.StarterGui:SetCore("SendNotification", {
-            Title    = config.Title or "NovaUI",
+            Title    = config.Title or "DivaUI",
             Text     = config.Content or config.Text or "",
             Duration = config.Duration or 3,
         })
@@ -157,7 +157,7 @@ function Library:CreateWindow(config)
     Window.__index = Window
     
     -- Config
-    Window.Name      = config.Name or "NovaUI"
+    Window.Name      = config.Name or "DivaUI"
     Window.ThemeName = config.Theme or "Dark"
     Window.SizeName  = config.Size or "Normal"
     Window.FontName  = config.Font or "Gotham"
@@ -730,7 +730,7 @@ function Library._TabMethods:CreateButton(config)
         if config.Callback then
             task.spawn(function()
                 local ok, err = pcall(config.Callback)
-                if not ok then warn("[NovaUI] Button callback error: "..tostring(err)) end
+                if not ok then warn("[DivaUI] Button callback error: "..tostring(err)) end
             end)
         end
     end)
@@ -785,7 +785,7 @@ function Library._TabMethods:CreateToggle(config)
         if config.Callback then
             task.spawn(function()
                 local ok, err = pcall(config.Callback, state)
-                if not ok then warn("[NovaUI] Toggle callback error: "..tostring(err)) end
+                if not ok then warn("[DivaUI] Toggle callback error: "..tostring(err)) end
             end)
         end
     end
@@ -805,7 +805,7 @@ function Library._TabMethods:CreateToggle(config)
     if config.Default ~= nil and config.Callback then
         task.spawn(function()
             local ok, err = pcall(config.Callback, state)
-            if not ok then warn("[NovaUI] Toggle init callback error: "..tostring(err)) end
+            if not ok then warn("[DivaUI] Toggle init callback error: "..tostring(err)) end
         end)
     end
     
@@ -898,7 +898,7 @@ function Library._TabMethods:CreateSlider(config)
         if fireCallback and config.Callback then
             task.spawn(function()
                 local ok, err = pcall(config.Callback, v)
-                if not ok then warn("[NovaUI] Slider callback error: "..tostring(err)) end
+                if not ok then warn("[DivaUI] Slider callback error: "..tostring(err)) end
             end)
         end
     end
@@ -1069,7 +1069,7 @@ function Library._TabMethods:CreateDropdown(config)
                 if config.Callback then
                     task.spawn(function()
                         local ok, err = pcall(config.Callback, opt)
-                        if not ok then warn("[NovaUI] Dropdown callback error: "..tostring(err)) end
+                        if not ok then warn("[DivaUI] Dropdown callback error: "..tostring(err)) end
                     end)
                 end
                 return
@@ -1171,7 +1171,7 @@ function Library._TabMethods:CreateTextBox(config)
         if config.Callback then
             task.spawn(function()
                 local ok, err = pcall(config.Callback, val, enterPressed)
-                if not ok then warn("[NovaUI] TextBox callback error: "..tostring(err)) end
+                if not ok then warn("[DivaUI] TextBox callback error: "..tostring(err)) end
             end)
         end
     end)
@@ -1233,7 +1233,7 @@ function Library._TabMethods:CreateColorPicker(config)
         if fireCallback and config.Callback then
             task.spawn(function()
                 local ok, err = pcall(config.Callback, colors[i].Color, colors[i].Name)
-                if not ok then warn("[NovaUI] ColorPicker callback error: "..tostring(err)) end
+                if not ok then warn("[DivaUI] ColorPicker callback error: "..tostring(err)) end
             end)
         end
     end
@@ -1346,7 +1346,7 @@ function Library._TabMethods:CreateKeybind(config)
         if input.KeyCode == currentKey and config.Callback then
             task.spawn(function()
                 local ok, err = pcall(config.Callback, currentKey)
-                if not ok then warn("[NovaUI] Keybind callback error: "..tostring(err)) end
+                if not ok then warn("[DivaUI] Keybind callback error: "..tostring(err)) end
             end)
         end
     end)
@@ -1424,7 +1424,7 @@ function Library:CreateMobileButton(config)
                 if not moved and config.Callback then
                     task.spawn(function()
                         local ok, err = pcall(config.Callback, btn)
-                        if not ok then warn("[NovaUI] MobileBtn callback error: "..tostring(err)) end
+                        if not ok then warn("[DivaUI] MobileBtn callback error: "..tostring(err)) end
                     end)
                 end
             end
@@ -1445,14 +1445,14 @@ function Library:Destroy()
     end
     self.Windows = {}
     self.Flags   = {}
-    shared.__NovaUI_Destroy = nil
+    shared.__DivaUI_Destroy = nil
 end
 
 --==[ Register destroy for anti-double-load ]==--
-shared.__NovaUI_Destroy = function() Library:Destroy() end
+shared.__DivaUI_Destroy = function() Library:Destroy() end
 
 --==[ Expose globally for easy access ]==--
-getgenv().NovaUI = Library
+getgenv().DivaUI = Library
 
 --==[ Return ]==--
 return Library

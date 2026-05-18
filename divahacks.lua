@@ -1,4 +1,4 @@
-local DivaUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/ctrl707/MyLibrary/main/loader.lua?v="..tick()))()
+local DivaUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/ctrl707/MyLibrary/main/loader.lua"))()
 
 local Services = {
     Players          = game:GetService("Players"),
@@ -460,79 +460,158 @@ end
 
 function ESP:ApplyHL(hl, mode, color)
     if not hl then return end
+    
+    local newFill, newOutline, newFillT, newOutlineT
+    
     if mode == "HIGHLIGHT" then
-        hl.FillColor=color hl.OutlineColor=color
-        hl.FillTransparency=S.EspFillTransparency hl.OutlineTransparency=0
+        newFill = color
+        newOutline = color
+        newFillT = S.EspFillTransparency
+        newOutlineT = 0
     elseif mode == "WO_CHAMS" then
-        hl.FillColor=color hl.OutlineColor=color
-        hl.FillTransparency=0 hl.OutlineTransparency=1
+        newFill = color
+        newOutline = color
+        newFillT = 0
+        newOutlineT = 1
     elseif mode == "CHAMS" then
-        hl.FillColor=color hl.OutlineColor=Color3.new(0,0,0)
-        hl.FillTransparency=0 hl.OutlineTransparency=0
+        newFill = color
+        newOutline = Color3.new(0, 0, 0)
+        newFillT = 0
+        newOutlineT = 0
+    else
+        return
     end
+    
+    -- 🔥 Меняем только если значение реально изменилось
+    if hl.FillColor ~= newFill then hl.FillColor = newFill end
+    if hl.OutlineColor ~= newOutline then hl.OutlineColor = newOutline end
+    if hl.FillTransparency ~= newFillT then hl.FillTransparency = newFillT end
+    if hl.OutlineTransparency ~= newOutlineT then hl.OutlineTransparency = newOutlineT end
 end
 
 function ESP:CreateHL(chr, data)
-    if data.Highlight then pcall(function() data.Highlight:Destroy() end) end
+    if data.Highlight then
+        pcall(function() data.Highlight:Destroy() end)
+        data.Highlight = nil
+    end
+    
     local hl = Instance.new("Highlight")
-    hl.Name=GenStr() hl.Adornee=chr
-    hl.Enabled=false hl.DepthMode=Enum.HighlightDepthMode.AlwaysOnTop
+    hl.Name = GenStr()
+    hl.Adornee = chr
+    hl.Enabled = false  -- 🔥 Выключен до первой настройки
+    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    -- 🔥 НЕ ставим Parent пока не настроили свойства
+    hl.FillTransparency = S.EspFillTransparency
+    hl.OutlineTransparency = 0
     hl.Parent = GlobalHLFolder
+    
     data.Highlight = hl
 end
 
 function ESP:UpdateHL(chr, data, isTarget)
     if not data then return end
+    
+    -- 🔥 ФИКС: Если ESP выключен для данного типа — сразу скрываем и выходим
+    local espActive = data.IsNPC and S.EspNPCEnabled or S.EspEnabled
+    
     local mode = data.IsNPC and S.NPCHighlightMode or S.HighlightMode
-    if mode == "OFF" then if data.Highlight then data.Highlight.Enabled=false end return end
+    
+    -- Если highlight режим OFF — скрываем
+    if mode == "OFF" then 
+        if data.Highlight and data.Highlight.Enabled then 
+            data.Highlight.Enabled = false 
+        end 
+        return 
+    end
+    
+    -- 🔥 ФИКС: Если ESP выключен, но highlight режим включён —
+    -- highlight работает независимо (это корректное поведение).
+    -- Мерцание было из-за NextUpdate throttle + раннего return в UpdateDraw.
+    -- Решение: НЕ завязываем UpdateHL на espActive, но убираем throttle для HL.
+
     local hrp = chr:FindFirstChild("HumanoidRootPart")
     if not hrp or not data.Humanoid or data.Humanoid.Health <= 0 then
-        if data.Highlight then data.Highlight.Enabled=false end return
+        if data.Highlight and data.Highlight.Enabled then 
+            data.Highlight.Enabled = false 
+        end
+        return
     end
-    if (hrp.Position-Camera.CFrame.Position).Magnitude > S.EspMaxDistance then
-        if data.Highlight then data.Highlight.Enabled=false end return
+
+    if (hrp.Position - Camera.CFrame.Position).Magnitude > S.EspMaxDistance then
+        if data.Highlight and data.Highlight.Enabled then 
+            data.Highlight.Enabled = false 
+        end
+        return
     end
-    if not data.Highlight or not data.Highlight.Parent then self:CreateHL(chr,data)
-    elseif data.Highlight.Adornee ~= chr then data.Highlight.Adornee=chr end
+
+    if not data.Highlight or not data.Highlight.Parent then 
+        self:CreateHL(chr, data) 
+    end
+    
+    local hl = data.Highlight
+    if hl.Adornee ~= chr then hl.Adornee = chr end
+
     local color
-    if isTarget then color=S.TargetColor
+    if isTarget then 
+        color = S.TargetColor
     elseif not data.IsNPC and data.Player and data.Player.Team then
-        local isTeam = data.Player.Team == LocalPlayer.Team
-        if S.UseTeamColor then color=data.Player.TeamColor.Color
-        elseif isTeam then color=Color3.fromRGB(0,200,0)
-        else color=S.HighlightColor end
-    else color=S.HighlightColor end
-    self:ApplyHL(data.Highlight, mode, color)
-    data.Highlight.Enabled = true
+        if S.UseTeamColor then 
+            color = data.Player.TeamColor.Color
+        elseif data.Player.Team == LocalPlayer.Team then 
+            color = Color3.fromRGB(0, 255, 0)
+        else 
+            color = S.HighlightColor 
+        end
+    else 
+        color = S.HighlightColor 
+    end
+
+    local fillT = (mode == "HIGHLIGHT") and S.EspFillTransparency or 0
+    local outT  = (mode == "WO_CHAMS") and 1 or 0
+    
+    if hl.FillColor ~= color then hl.FillColor = color end
+    if hl.OutlineColor ~= color then hl.OutlineColor = color end
+    if hl.FillTransparency ~= fillT then hl.FillTransparency = fillT end
+    if hl.OutlineTransparency ~= outT then hl.OutlineTransparency = outT end
+    
+    if not hl.Enabled then hl.Enabled = true end
 end
 
 function ESP:Update(dt)
     local now = tick()
     local camPos = Camera.CFrame.Position
     local sorted = {}
+    
     for chr, data in pairs(self.Tracked) do
-        if not chr.Parent then task.defer(function() self:Untrack(chr) end)
+        if not chr.Parent then 
+            task.defer(function() self:Untrack(chr) end)
         else
             local isT = (chr == R.LockedTarget)
+            
+            -- 🔥 UpdateDraw КАЖДЫЙ КАДР (Drawing объекты не должны фризить)
             self:UpdateDraw(chr, data, isT)
+            
             local hrp = chr:FindFirstChild("HumanoidRootPart")
-            local d = hrp and (hrp.Position-camPos).Magnitude or 9999
+            local d = hrp and (hrp.Position - camPos).Magnitude or 9999
             table.insert(sorted, {chr=chr, data=data, isT=isT, dist=d})
         end
     end
-    table.sort(sorted, function(a,b) return a.dist < b.dist end)
-    local hlCount, HL_LIMIT = 0, 100
+    
+    -- Highlight тоже каждый кадр, но с лимитом по дистанции
+    table.sort(sorted, function(a, b) return a.dist < b.dist end)
+    local hlCount = 0
+    local HL_LIMIT = 255
+    
     for _, entry in ipairs(sorted) do
-        if now >= (entry.data.NextUpdate or 0) then
-            entry.data.NextUpdate = now + 0.1 + math.random()*0.05
-            if hlCount < HL_LIMIT or entry.isT then
-                self:UpdateHL(entry.chr, entry.data, entry.isT)
-                if entry.data.Highlight and entry.data.Highlight.Enabled then hlCount=hlCount+1 end
-            else
-                if entry.data.Highlight then entry.data.Highlight.Enabled=false end
+        if hlCount < HL_LIMIT or entry.isT then
+            self:UpdateHL(entry.chr, entry.data, entry.isT)
+            if entry.data.Highlight and entry.data.Highlight.Enabled then 
+                hlCount = hlCount + 1 
             end
         else
-            if entry.data.Highlight and entry.data.Highlight.Enabled then hlCount=hlCount+1 end
+            if entry.data.Highlight and entry.data.Highlight.Enabled then 
+                entry.data.Highlight.Enabled = false 
+            end
         end
     end
 end
@@ -1390,31 +1469,13 @@ local function EnableShiftLockLoop()
     Camera.CFrame = Camera.CFrame * SHIFT_ENABLED_OFFSET
 end
 
-local function DisableShiftLock()
-    pcall(function()
-        local c = LocalPlayer.Character
-        if c then
-            local hum = c:FindFirstChildOfClass("Humanoid")
-            if hum then hum.AutoRotate = true end
-        end
-    end)
-    UpdateMobileShiftIcon("OFF")
-    Camera.CFrame = Camera.CFrame * SHIFT_DISABLED_OFFSET
-    if R.ShiftLockActive then
-        R.ShiftLockActive:Disconnect()
-        R.ShiftLockActive = nil
-    end
-end
-
 local function ToggleShiftLockState()
     if LocalPlayer.DevEnableMouseLock == false then
         pcall(function() LocalPlayer.DevEnableMouseLock = true end)
-        Notify("Shift Lock","Разблокирован принудительно",2)
+        Notify("Shift Lock","Force unlocked",2)
     end
     if not R.ShiftLockActive then
         R.ShiftLockActive = Services.RunService.RenderStepped:Connect(EnableShiftLockLoop)
-    else
-        DisableShiftLock()
     end
 end
 
@@ -1496,17 +1557,16 @@ SetShiftLock = function(on)
     S.ShiftLockEnabled = on
     R.ShiftLockEnabledByUser = on
     if not on then
-        if R.ShiftLockActive then DisableShiftLock() end
         RemoveMobileShiftButton()
         if R.ShiftPCConn then R.ShiftPCConn:Disconnect() R.ShiftPCConn=nil end
         return
     end
     if LocalPlayer.DevEnableMouseLock == false then
         local ok = pcall(function() LocalPlayer.DevEnableMouseLock = true end)
-        if ok then Notify("Shift Lock","🔓 Был ЗАБЛОКИРОВАН — разблокирован!",4)
-        else Notify("Shift Lock","⚠ Не удалось разблокировать",4) end
+        if ok then Notify("Shift Lock","! Was unlocked!",4)
+        else Notify("Shift Lock","! Failed to unlock",4) end
     else
-        Notify("Shift Lock","✅ Уже разблокирован",2)
+        Notify("Shift Lock","! Already unlocked",2)
     end
     if isMobile then
         CreateMobileShiftButton()
@@ -1517,7 +1577,7 @@ SetShiftLock = function(on)
             Services.ContextActionService:SetPosition("DivaShiftLock", UDim2.new(0.8,0,0.8,0))
             R.MobileShiftCASBound = true
         end)
-        Notify("Shift Lock","Тапни иконку чтобы переключить",3)
+        Notify("Shift Lock","Tap icon to toggle",3)
     else
         if R.ShiftPCConn then R.ShiftPCConn:Disconnect() end
         R.ShiftPCConn = Services.UserInputService.InputBegan:Connect(function(input, gp)
@@ -1527,7 +1587,7 @@ SetShiftLock = function(on)
                 ToggleShiftLockState()
             end
         end)
-        Notify("Shift Lock","Нажми Shift чтобы переключить",3)
+        Notify("Shift Lock","Press Shift to toggle",3)
     end
 end
 
@@ -2097,11 +2157,6 @@ SyncUIFromSettings = function()
         Camera.FieldOfView = S.CameraFOV
         ApplyZoomLimits()
         ApplyAntiStates()
-        
-        -- Обновляем все highlight'ы после загрузки
-        for chr, data in pairs(ESP.Tracked) do
-            ESP:UpdateHL(chr, data, chr == R.LockedTarget)
-        end
     end)
 end
 
@@ -2275,7 +2330,7 @@ CreateFixedSlider(AimTab, "Offset Y", "OffsetY", -5, 5, "%.1f")
 
 AimTab:CreateDivider()
 AimTab:CreateSection("Triggerbot")
-AimTab:CreateLabel({Text="Стреляет автоматически при наводке", Wrapped=true})
+AimTab:CreateLabel({Text="Fires automatically when aimed", Wrapped=true})
 CreateFixedToggle(AimTab, "Triggerbot", "TriggerbotEnabled", function(v) SetTriggerbot(v) end)
 CreateFixedDropdown(AimTab, "Trigger Key", "TriggerbotKey", TriggerbotKeys)
 CreateFixedSlider(AimTab, "Trigger Delay (s)", "TriggerbotDelay", 0.05, 1, "%.2f")
@@ -2373,7 +2428,7 @@ WorldTab:CreateDropdown({
 
 WorldTab:CreateDivider()
 WorldTab:CreateSection("Force Speed")
-WorldTab:CreateLabel({Text="⚠ Обходит блокировку WalkSpeed", Wrapped=true})
+WorldTab:CreateLabel({Text="! Bypasses WalkSpeed ​​blocking", Wrapped=true})
 CreateFixedSlider(WorldTab, "Force Speed Value", "ForceSpeedValue", 5, 200, "%d")
 CreateFixedDropdown(WorldTab, "Force Method", "ForceSpeedMethodName", ForceSpeedMethodNames, function(v)
     for i, n in ipairs(ForceSpeedMethodNames) do
@@ -2384,17 +2439,68 @@ end)
 CreateFixedToggle(WorldTab, "Force Speed", "ForceSpeedEnabled", function(v) SetForceSpeed(v) end)
 
 WorldTab:CreateDivider()
-WorldTab:CreateSection("Shift Lock")
-WorldTab:CreateLabel({Text="⚠ Проверяет DevEnableMouseLock и разблокирует", Wrapped=true})
-CreateFixedToggle(WorldTab, "Shift Lock Unlocker", "ShiftLockEnabled", function(v) SetShiftLock(v) end)
+WorldTab:CreateSection("Shift Lock Unlocker")
+WorldTab:CreateLabel({
+    Text = "Press the button to unlock Shift Lock in-game",
+    Wrapped = true
+})
+
+WorldTab:CreateActionButton({
+    Name = "Unlock Shift Lock",
+    Cooldown = 1.5,
+    NotifyTitle = "Shift Lock",
+    Callback = function()
+        local wasLocked = (LocalPlayer.DevEnableMouseLock == false)
+        
+        local ok = pcall(function() 
+            LocalPlayer.DevEnableMouseLock = true 
+        end)
+        
+        if not ok then
+            Notify("Shift Lock", "! Failed to unlock (server-protected)", 4)
+            return false
+        end
+        
+        if wasLocked then
+            Notify("Shift Lock", "! Unlocked! Shift key now works", 4)
+        else
+            Notify("Shift Lock", "! Already unlocked", 3)
+        end
+        
+        -- Activate Shift Lock listener if not active yet
+        if not R.ShiftPCConn and not isMobile then
+            R.ShiftPCConn = Services.UserInputService.InputBegan:Connect(function(input, gp)
+                if gp then return end
+                if input.KeyCode == Enum.KeyCode.LeftShift or input.KeyCode == Enum.KeyCode.RightShift then
+                    ToggleShiftLockState()
+                end
+            end)
+        end
+        
+        -- Mobile Shift Lock button
+        if isMobile and not R.MobileShiftBtn then
+            CreateMobileShiftButton()
+            pcall(function()
+                Services.ContextActionService:BindAction("DivaShiftLock", function(_, state)
+                    if state == Enum.UserInputState.Begin then 
+                        ToggleShiftLockState() 
+                    end
+                end, false, "On")
+                R.MobileShiftCASBound = true
+            end)
+        end
+        
+        return true
+    end
+})
 
 WorldTab:CreateDivider()
 WorldTab:CreateSection("Camera Zoom")
-WorldTab:CreateLabel({Text="Min/Max расстояние зума камеры", Wrapped=true})
+WorldTab:CreateLabel({Text="Min/Max camera zoom distance", Wrapped=true})
 CreateFixedSlider(WorldTab, "Zoom Min", "ZoomMin", 0, 50, "%.1f", function(v) ApplyZoomLimits() end)
 CreateFixedSlider(WorldTab, "Zoom Max", "ZoomMax", 10, 1000, "%d", function(v) ApplyZoomLimits() end)
 WorldTab:CreateButton({Name="Apply Zoom", Callback=function()
-    ApplyZoomLimits() Notify("Zoom","Применено: "..S.ZoomMin.." — "..S.ZoomMax, 2)
+    ApplyZoomLimits() Notify("Zoom","Applied: "..S.ZoomMin.." — "..S.ZoomMax, 2)
 end})
 
 -- ═══ FLY TAB ═══
@@ -2454,12 +2560,12 @@ CreateFixedSlider(CharTab, "Camera FOV", "CameraFOV", 1, 120, "%d", function(v) 
 
 CharTab:CreateDivider()
 CharTab:CreateSection("FORCE APPLY")
-CharTab:CreateLabel({Text="⚠ Постоянно применяет Speed/Jump/FOV", Wrapped=true})
+CharTab:CreateLabel({Text="! Constantly applies Speed/Jump/FOV", Wrapped=true})
 CreateFixedToggle(CharTab, "Force Apply Stats", "ForceApplyEnabled", function(v) SetForceApply(v) end)
 
 CharTab:CreateDivider()
 CharTab:CreateSection("SCAFFOLD")
-CharTab:CreateLabel({Text="Платформа под ногами (стабильная)", Wrapped=true})
+CharTab:CreateLabel({Text="Platform underfoot", Wrapped=true})
 CreateFixedToggle(CharTab, "Scaffold", "ScaffoldEnabled", function(v) SetScaffold(v) end)
 CreateFixedSlider(CharTab, "Size X", "ScaffoldX", 1, 10, "%.1f")
 CreateFixedSlider(CharTab, "Size Y", "ScaffoldY", 0.5, 10, "%.1f")

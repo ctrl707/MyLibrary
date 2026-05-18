@@ -6,7 +6,7 @@
     local DivaUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/ctrl707/MyLibrary/main/loader.lua"))()
 ]]
 
-local URL = "https://raw.githubusercontent.com/ctrl707/MyLibrary/main/init.lua?v=" .. tostring(tick())
+local URL = "https://raw.githubusercontent.com/ctrl707/MyLibrary/main/init.lua"
 
 local success, result = pcall(function()
     return loadstring(game:HttpGet(URL))()

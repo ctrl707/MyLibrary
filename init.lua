@@ -1832,6 +1832,89 @@ function Library._TabMethods:CreateAntiThingManager(config)
             dropBtn.Text = "▼  "..items[selIdx].Label
         end
     end)
+
+    --==[ CreateActionButton (one-shot action with feedback) ]==--
+    function Library._TabMethods:CreateActionButton(config)
+        config = config or {}
+        local TabRef = self
+        local name = config.Name or "Action"
+        local cooldown = config.Cooldown or 1.5
+        
+        local w = CreateWrap(TabRef.Page, name, 32)
+        local btn = Instance.new("TextButton")
+        btn.Name = "ActionButton"
+        btn.Size = UDim2.new(1,0,1,0)
+        btn.Text = "⚡ "..name
+        btn.TextSize = 13
+        btn.Parent = w
+        TabRef._RegBtn(btn, false)
+        local bc = Instance.new("UICorner") bc.Parent = btn TabRef._RegCorner(bc)
+        
+        local lastClick = 0
+        local busy = false
+        
+        local function flashSuccess()
+            local origColor = btn.BackgroundColor3
+            btn.BackgroundColor3 = Color3.fromRGB(72,160,92)
+            btn.Text = "✓ "..name.." — Activated!"
+            Library._Utils.Tween(btn, {BackgroundColor3 = origColor}, 0.6)
+            task.delay(1, function()
+                if btn and btn.Parent then 
+                    btn.Text = "⚡ "..name 
+                end
+            end)
+        end
+        
+        local function flashFail(msg)
+            local origColor = btn.BackgroundColor3
+            btn.BackgroundColor3 = Color3.fromRGB(160,72,72)
+            btn.Text = "✕ "..(msg or "Failed")
+            Library._Utils.Tween(btn, {BackgroundColor3 = origColor}, 0.6)
+            task.delay(1.2, function()
+                if btn and btn.Parent then 
+                    btn.Text = "⚡ "..name 
+                end
+            end)
+        end
+        
+        btn.MouseButton1Click:Connect(function()
+            local now = tick()
+            if busy or (now - lastClick) < cooldown then return end
+            lastClick = now
+            busy = true
+            
+            if config.Callback then
+                task.spawn(function()
+                    local ok, result = pcall(config.Callback)
+                    if ok then
+                        if result == false then
+                            flashFail("Failed")
+                        else
+                            flashSuccess()
+                            Library:Notify({
+                                Title = config.NotifyTitle or name,
+                                Content = config.NotifyContent or (name.." activated!"),
+                                Duration = 2,
+                            })
+                        end
+                    else
+                        flashFail("Error")
+                        warn("[DivaUI] ActionButton error: "..tostring(result))
+                    end
+                    busy = false
+                end)
+            else
+                busy = false
+            end
+        end)
+        
+        TabRef._ApplyTheme()
+        
+        local Obj = {Instance = btn}
+        function Obj:Set(text) btn.Text = "⚡ "..tostring(text) end
+        function Obj:SetCallback(fn) config.Callback = fn end
+        return Obj
+    end
     
     local addW = CreateWrap(TabRef.Page, "AntiAdd", 32)
     local addBtn = Instance.new("TextButton")

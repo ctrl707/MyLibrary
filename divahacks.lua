@@ -40,9 +40,6 @@ if shared[DIVA_MARKER] then
     task.wait(0.3)
 end
 
--- ════════════════════════════════════════════════
---    🔥 ГЛОБАЛЬНЫЕ ОБЩИЕ КОНТЕЙНЕРЫ (анти-утечка)
--- ════════════════════════════════════════════════
 local GlobalHLFolder = Instance.new("Folder")
 GlobalHLFolder.Name = GenStr()
 GlobalHLFolder.Parent = Services.CoreGui
@@ -93,18 +90,16 @@ local S = {
     ForceSpeedEnabled=false, ForceSpeedValue=16, ForceSpeedMethod=1,
     ForceSpeedMethodName="Velocity",
     ShiftLockEnabled=false,
-    ForceApplyEnabled=false,
     ZoomMin=0.5, ZoomMax=128,
     ScaffoldEnabled=false, ScaffoldX=2, ScaffoldY=1, ScaffoldZ=2,
     TriggerbotEnabled=false, TriggerbotKey="MouseButton1", TriggerbotDelay=0.1,
     AutoSaveEnabled=false,
     FlingInvis=false, AntiSlipEnabled=false, AntiSlipMode="StopOnly",
+    WaterBlockEnabled=false, WalkOnWater=false, SwimUnder=false,
+    GameSyncEnabled=false, ForceApplyEnabled=false,
 }
 
-local AntiSlipModes = {
-    "StopOnly",
-    "Full"
-}
+local AntiSlipModes = {"StopOnly","Full"}
 
 local R = {
     LockedTarget=nil,
@@ -112,7 +107,7 @@ local R = {
     SaveEnabled=false, SaveIntIdx=1, SaveInterval=60,
     SaveDir="diva_saves", CurSlot=1,
     OldPos=nil, FPDH=workspace.FallenPartsDestroyHeight,
-    FlyPos=nil, FlyGyro=nil, CharParts={},
+    FlyBV=nil, FlyPos=nil, FlyGyro=nil, CharParts={},
     MobileAiming=false, RenderName=nil,
     CarFlyBV=nil, CarFlyBG=nil, CarFlyConn=nil,
     ForceSpeedConn=nil, ForceBV=nil,
@@ -235,21 +230,19 @@ local function UpdateFPS(dt)
 end
 
 local function IsVisible(targetPart)
-    local lhrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    if not lhrp then return false end
+    local cam = workspace.CurrentCamera
+    if not cam then return false end
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
-    params.FilterDescendantsInstances = {LocalPlayer.Character, targetPart.Parent}
-    local dir = targetPart.Position - lhrp.Position
-    local result = workspace:Raycast(lhrp.Position, dir, params)
+    params.FilterDescendantsInstances = {LocalPlayer.Character, targetPart.Parent, cam}
+    local origin = cam.CFrame.Position
+    local direction = targetPart.Position - origin
+    local result = workspace:Raycast(origin, direction, params)
     if not result then return true end
     if result.Instance:IsDescendantOf(targetPart.Parent) then return true end
-    return (result.Position - lhrp.Position).Magnitude > dir.Magnitude - 0.5
+    return (result.Position - origin).Magnitude > direction.Magnitude - 0.5
 end
 
--- ════════════════════════════════════════════════
---          ESP
--- ════════════════════════════════════════════════
 local ESP = {
     Tracked  = setmetatable({},{__mode="k"}),
     DrawData = setmetatable({},{__mode="k"}),
@@ -460,29 +453,17 @@ end
 
 function ESP:ApplyHL(hl, mode, color)
     if not hl then return end
-    
     local newFill, newOutline, newFillT, newOutlineT
-    
     if mode == "HIGHLIGHT" then
-        newFill = color
-        newOutline = color
-        newFillT = S.EspFillTransparency
-        newOutlineT = 0
+        newFill = color newOutline = color
+        newFillT = S.EspFillTransparency newOutlineT = 0
     elseif mode == "WO_CHAMS" then
-        newFill = color
-        newOutline = color
-        newFillT = 0
-        newOutlineT = 1
+        newFill = color newOutline = color
+        newFillT = 0 newOutlineT = 1
     elseif mode == "CHAMS" then
-        newFill = color
-        newOutline = Color3.new(0, 0, 0)
-        newFillT = 0
-        newOutlineT = 0
-    else
-        return
-    end
-    
-    -- 🔥 Меняем только если значение реально изменилось
+        newFill = color newOutline = Color3.new(0,0,0)
+        newFillT = 0 newOutlineT = 0
+    else return end
     if hl.FillColor ~= newFill then hl.FillColor = newFill end
     if hl.OutlineColor ~= newOutline then hl.OutlineColor = newOutline end
     if hl.FillTransparency ~= newFillT then hl.FillTransparency = newFillT end
@@ -494,86 +475,49 @@ function ESP:CreateHL(chr, data)
         pcall(function() data.Highlight:Destroy() end)
         data.Highlight = nil
     end
-    
     local hl = Instance.new("Highlight")
     hl.Name = GenStr()
     hl.Adornee = chr
-    hl.Enabled = false  -- 🔥 Выключен до первой настройки
+    hl.Enabled = false
     hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-    -- 🔥 НЕ ставим Parent пока не настроили свойства
     hl.FillTransparency = S.EspFillTransparency
     hl.OutlineTransparency = 0
     hl.Parent = GlobalHLFolder
-    
     data.Highlight = hl
 end
 
 function ESP:UpdateHL(chr, data, isTarget)
     if not data then return end
-    
-    -- 🔥 ФИКС: Если ESP выключен для данного типа — сразу скрываем и выходим
-    local espActive = data.IsNPC and S.EspNPCEnabled or S.EspEnabled
-    
     local mode = data.IsNPC and S.NPCHighlightMode or S.HighlightMode
-    
-    -- Если highlight режим OFF — скрываем
-    if mode == "OFF" then 
-        if data.Highlight and data.Highlight.Enabled then 
-            data.Highlight.Enabled = false 
-        end 
-        return 
+    if mode == "OFF" then
+        if data.Highlight and data.Highlight.Enabled then data.Highlight.Enabled = false end
+        return
     end
-    
-    -- 🔥 ФИКС: Если ESP выключен, но highlight режим включён —
-    -- highlight работает независимо (это корректное поведение).
-    -- Мерцание было из-за NextUpdate throttle + раннего return в UpdateDraw.
-    -- Решение: НЕ завязываем UpdateHL на espActive, но убираем throttle для HL.
-
     local hrp = chr:FindFirstChild("HumanoidRootPart")
     if not hrp or not data.Humanoid or data.Humanoid.Health <= 0 then
-        if data.Highlight and data.Highlight.Enabled then 
-            data.Highlight.Enabled = false 
-        end
+        if data.Highlight and data.Highlight.Enabled then data.Highlight.Enabled = false end
         return
     end
-
     if (hrp.Position - Camera.CFrame.Position).Magnitude > S.EspMaxDistance then
-        if data.Highlight and data.Highlight.Enabled then 
-            data.Highlight.Enabled = false 
-        end
+        if data.Highlight and data.Highlight.Enabled then data.Highlight.Enabled = false end
         return
     end
-
-    if not data.Highlight or not data.Highlight.Parent then 
-        self:CreateHL(chr, data) 
-    end
-    
+    if not data.Highlight or not data.Highlight.Parent then self:CreateHL(chr, data) end
     local hl = data.Highlight
     if hl.Adornee ~= chr then hl.Adornee = chr end
-
     local color
-    if isTarget then 
-        color = S.TargetColor
+    if isTarget then color = S.TargetColor
     elseif not data.IsNPC and data.Player and data.Player.Team then
-        if S.UseTeamColor then 
-            color = data.Player.TeamColor.Color
-        elseif data.Player.Team == LocalPlayer.Team then 
-            color = Color3.fromRGB(0, 255, 0)
-        else 
-            color = S.HighlightColor 
-        end
-    else 
-        color = S.HighlightColor 
-    end
-
+        if S.UseTeamColor then color = data.Player.TeamColor.Color
+        elseif data.Player.Team == LocalPlayer.Team then color = Color3.fromRGB(0,255,0)
+        else color = S.HighlightColor end
+    else color = S.HighlightColor end
     local fillT = (mode == "HIGHLIGHT") and S.EspFillTransparency or 0
     local outT  = (mode == "WO_CHAMS") and 1 or 0
-    
     if hl.FillColor ~= color then hl.FillColor = color end
     if hl.OutlineColor ~= color then hl.OutlineColor = color end
     if hl.FillTransparency ~= fillT then hl.FillTransparency = fillT end
     if hl.OutlineTransparency ~= outT then hl.OutlineTransparency = outT end
-    
     if not hl.Enabled then hl.Enabled = true end
 end
 
@@ -581,37 +525,26 @@ function ESP:Update(dt)
     local now = tick()
     local camPos = Camera.CFrame.Position
     local sorted = {}
-    
     for chr, data in pairs(self.Tracked) do
-        if not chr.Parent then 
+        if not chr.Parent then
             task.defer(function() self:Untrack(chr) end)
         else
             local isT = (chr == R.LockedTarget)
-            
-            -- 🔥 UpdateDraw КАЖДЫЙ КАДР (Drawing объекты не должны фризить)
             self:UpdateDraw(chr, data, isT)
-            
             local hrp = chr:FindFirstChild("HumanoidRootPart")
             local d = hrp and (hrp.Position - camPos).Magnitude or 9999
             table.insert(sorted, {chr=chr, data=data, isT=isT, dist=d})
         end
     end
-    
-    -- Highlight тоже каждый кадр, но с лимитом по дистанции
     table.sort(sorted, function(a, b) return a.dist < b.dist end)
     local hlCount = 0
     local HL_LIMIT = 255
-    
     for _, entry in ipairs(sorted) do
         if hlCount < HL_LIMIT or entry.isT then
             self:UpdateHL(entry.chr, entry.data, entry.isT)
-            if entry.data.Highlight and entry.data.Highlight.Enabled then 
-                hlCount = hlCount + 1 
-            end
+            if entry.data.Highlight and entry.data.Highlight.Enabled then hlCount = hlCount + 1 end
         else
-            if entry.data.Highlight and entry.data.Highlight.Enabled then 
-                entry.data.Highlight.Enabled = false 
-            end
+            if entry.data.Highlight and entry.data.Highlight.Enabled then entry.data.Highlight.Enabled = false end
         end
     end
 end
@@ -1117,65 +1050,431 @@ function Fling:Stop()
     R.FlingActive=false Notify("Fling","Stopped",2)
 end
 
--- ════════════════════════════════════════════════
---          SET FUNCTIONS
--- ════════════════════════════════════════════════
+local WaterBlock = {
+    Enabled     = false,
+    WalkOnWater = false,
+    SwimUnder   = false,
+    Platform    = nil,
+    MainConn    = nil,
+    ScanConn    = nil,
+    WaterParts  = {},
+    LastWaterY  = nil,
+    DebugMode   = false,
+    Jumping     = false,
+    JumpVel     = 0,
+}
+
+local function WB_FindWaterParts()
+    local parts = {}
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("BasePart") and obj.Material == Enum.Material.Water then
+            table.insert(parts, obj)
+        end
+    end
+    WaterBlock.WaterParts = parts
+    return #parts
+end
+
+local function WB_RaycastWater(pos)
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = {LocalPlayer.Character, WaterBlock.Platform}
+    params.IgnoreWater = false
+    local rayOrigin = pos + Vector3.new(0, 200, 0)
+    local rayDir   = Vector3.new(0, -500, 0)
+    local result   = workspace:Raycast(rayOrigin, rayDir, params)
+    if result then
+        if result.Material == Enum.Material.Water then
+            return true, result.Position.Y
+        end
+        if result.Instance == workspace.Terrain then
+            local params2 = RaycastParams.new()
+            params2.FilterType = Enum.RaycastFilterType.Exclude
+            params2.FilterDescendantsInstances = {LocalPlayer.Character, WaterBlock.Platform}
+            params2.IgnoreWater = false
+            local rayOrigin2 = result.Position + Vector3.new(0, 0.5, 0)
+            local rayDir2 = Vector3.new(0, 100, 0)
+            local result2 = workspace:Raycast(rayOrigin2, rayDir2, params2)
+            if result2 and result2.Material == Enum.Material.Water then
+                return true, result2.Position.Y
+            end
+        end
+    end
+    return false, nil
+end
+
+local function WB_CheckTerrainBox(pos)
+    local terrain = workspace.Terrain
+    if not terrain then return false end
+    local ok, isWater = pcall(function()
+        local cellPos = Vector3.new(
+            math.floor(pos.X / 4),
+            math.floor(pos.Y / 4),
+            math.floor(pos.Z / 4)
+        )
+        local region = Region3.new(
+            Vector3.new(cellPos.X*4, cellPos.Y*4, cellPos.Z*4),
+            Vector3.new((cellPos.X+1)*4, (cellPos.Y+1)*4, (cellPos.Z+1)*4)
+        )
+        local materials, _ = terrain:ReadVoxels(region, 4)
+        if materials and materials.Size.X > 0 then
+            return materials[1][1][1] == Enum.Material.Water
+        end
+        return false
+    end)
+    return ok and isWater
+end
+
+local function WB_CheckSwimState(hum)
+    if not hum then return false end
+    return hum:GetState() == Enum.HumanoidStateType.Swimming
+end
+
+local function WB_DetectWater(hrp, hum)
+    if not hrp then return false, nil end
+    local pos = hrp.Position
+    local swimming   = WB_CheckSwimState(hum)
+    local rayHit, raySurfY = WB_RaycastWater(pos)
+    local voxelHit   = WB_CheckTerrainBox(pos)
+
+    local basePartHit, basePartY = false, nil
+    for _, part in ipairs(WaterBlock.WaterParts) do
+        if not part or not part.Parent then continue end
+        local pPos = part.Position
+        local hX = part.Size.X / 2
+        local hY = part.Size.Y / 2
+        local hZ = part.Size.Z / 2
+        if pos.X >= pPos.X - hX and pos.X <= pPos.X + hX then
+            if pos.Z >= pPos.Z - hZ and pos.Z <= pPos.Z + hZ then
+                if pos.Y >= pPos.Y - hY - 10 and pos.Y <= pPos.Y + hY + 10 then
+                    basePartHit = true
+                    basePartY = pPos.Y + hY
+                    break
+                end
+            end
+        end
+    end
+
+    local detected = swimming or rayHit or voxelHit or basePartHit
+    local surfY = raySurfY or basePartY or WaterBlock.LastWaterY
+    if detected and surfY then
+        WaterBlock.LastWaterY = surfY
+    end
+    return detected, surfY
+end
+
+local function WB_EnsurePlatform()
+    if WaterBlock.Platform and WaterBlock.Platform.Parent then
+        return WaterBlock.Platform
+    end
+    local p = Instance.new("Part")
+    p.Name          = "DivaWaterPlat"
+    p.Size          = Vector3.new(12, 1, 12)
+    p.Anchored      = true
+    p.CanCollide    = true
+    p.CanTouch      = false
+    p.CanQuery      = false
+    p.Transparency  = WaterBlock.DebugMode and 0.3 or 1
+    p.CastShadow    = false
+    p.Material      = Enum.Material.SmoothPlastic
+    p.Color         = Color3.fromRGB(0, 255, 0)
+    p.TopSurface    = Enum.SurfaceType.Smooth
+    p.BottomSurface = Enum.SurfaceType.Smooth
+    p.Parent        = workspace
+    WaterBlock.Platform = p
+    return p
+end
+
+local function WB_DestroyPlatform()
+    if WaterBlock.Platform and WaterBlock.Platform.Parent then
+        WaterBlock.Platform:Destroy()
+    end
+    WaterBlock.Platform = nil
+end
+
+local function WB_BlockSwim(hum, block)
+    if not hum or not hum.Parent then return end
+    pcall(function()
+        hum:SetStateEnabled(Enum.HumanoidStateType.Swimming, not block)
+    end)
+end
+
+local function WB_Update()
+    if not WaterBlock.Enabled then return end
+    local c = LocalPlayer.Character
+    if not c then return end
+    local hrp = c:FindFirstChild("HumanoidRootPart")
+    local hum = c:FindFirstChildOfClass("Humanoid")
+    if not hrp or not hum or hum.Health <= 0 then return end
+    if S.FlyEnabled or S.CarFlyEnabled then
+        WB_DestroyPlatform()
+        return
+    end
+    local inWater, surfY = WB_DetectWater(hrp, hum)
+    if not inWater then
+        WB_DestroyPlatform()
+        WB_BlockSwim(hum, false)
+        WaterBlock.Jumping = false
+        return
+    end
+    WB_BlockSwim(hum, true)
+    if hum:GetState() == Enum.HumanoidStateType.Swimming then
+        hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+    end
+    local pos = hrp.Position
+    if WaterBlock.WalkOnWater then
+        local targetSurfY = surfY
+        if not targetSurfY then
+            local params = RaycastParams.new()
+            params.FilterType = Enum.RaycastFilterType.Exclude
+            params.FilterDescendantsInstances = {c, WaterBlock.Platform}
+            params.IgnoreWater = false
+            local result = workspace:Raycast(pos, Vector3.new(0, 50, 0), params)
+            if result and result.Material == Enum.Material.Water then
+                targetSurfY = result.Position.Y
+            else
+                targetSurfY = pos.Y + 2
+            end
+        end
+        local humHip   = hum.HipHeight or 2
+        local hrpHalfY = hrp.Size.Y / 2
+        local platTopY = targetSurfY - 0.3
+        local platY    = platTopY - 0.5
+        local plat = WB_EnsurePlatform()
+        local desiredTransp = WaterBlock.DebugMode and 0.3 or 1
+        if plat.Transparency ~= desiredTransp then
+            plat.Transparency = desiredTransp
+        end
+        plat.CFrame = CFrame.new(pos.X, platY, pos.Z)
+        local desiredCharY = platTopY + humHip + hrpHalfY
+        if pos.Y < desiredCharY - 2 then
+            hrp.CFrame = CFrame.new(pos.X, desiredCharY, pos.Z) * hrp.CFrame.Rotation
+            local vel = hrp.AssemblyLinearVelocity
+            hrp.AssemblyLinearVelocity = Vector3.new(vel.X, 0, vel.Z)
+        end
+        local vel = hrp.AssemblyLinearVelocity
+        if vel.Y > 5 then
+            hrp.AssemblyLinearVelocity = Vector3.new(vel.X, 0, vel.Z)
+        end
+    elseif WaterBlock.SwimUnder then
+        WB_DestroyPlatform()
+        local vel = hrp.AssemblyLinearVelocity
+        if hum.Jump and not WaterBlock.Jumping then
+            WaterBlock.Jumping = true
+            local jumpPower = hum.JumpPower
+            if hum.UseJumpPower == false then
+                jumpPower = math.sqrt(2 * workspace.Gravity * (hum.JumpHeight or 7.2))
+            end
+            hrp.AssemblyLinearVelocity = Vector3.new(vel.X, jumpPower, vel.Z)
+        end
+        if vel.Y <= 0 then
+            WaterBlock.Jumping = false
+        end
+        local gravity = workspace.Gravity
+        local dt = 1/60
+        if vel.Y > -50 then
+            hrp.AssemblyLinearVelocity = Vector3.new(
+                vel.X,
+                vel.Y - gravity * dt,
+                vel.Z
+            )
+        end
+    else
+        WB_DestroyPlatform()
+    end
+end
+
+local function SetWaterBlock(on)
+    WaterBlock.Enabled = on
+    S.WaterBlockEnabled = on
+    if WaterBlock.MainConn then WaterBlock.MainConn:Disconnect() WaterBlock.MainConn=nil end
+    if WaterBlock.ScanConn then WaterBlock.ScanConn:Disconnect() WaterBlock.ScanConn=nil end
+    if not on then
+        WB_DestroyPlatform()
+        WaterBlock.LastWaterY = nil
+        WaterBlock.Jumping = false
+        local c = LocalPlayer.Character
+        if c then
+            local hum = c:FindFirstChildOfClass("Humanoid")
+            if hum then WB_BlockSwim(hum, false) end
+        end
+        WaterBlock.WalkOnWater = false
+        WaterBlock.SwimUnder   = false
+        return
+    end
+    WB_FindWaterParts()
+    WaterBlock.ScanConn = workspace.DescendantAdded:Connect(function(obj)
+        if obj:IsA("BasePart") and obj.Material == Enum.Material.Water then
+            table.insert(WaterBlock.WaterParts, obj)
+        end
+    end)
+    WaterBlock.MainConn = Services.RunService.RenderStepped:Connect(function()
+        if not WaterBlock.Enabled then return end
+        pcall(WB_Update)
+    end)
+end
+
+-- UIRefs нужен до всех функций SetXxx которые его используют
+local UIRefs = {
+    Toggles  = {},
+    Sliders  = {},
+    Dropdowns = {},
+    ColorPickers = {},
+    AntiManager = nil,
+}
+
+local SyncUI = function(key, value) end
 
 local SetFly, SetCarFly, SetNoClip, SetShiftLock, SetForceApply
 local SetScaffold, SetTriggerbot, ApplyZoomLimits, SetForceSpeed
 local SetAntiSlip
 
+local _RawSetFly, _RawSetCarFly
+
+_RawSetFly = function(on)
+    S.FlyEnabled = on
+    SyncUI("FlyEnabled", on)
+    if R.FlyPos then pcall(function() R.FlyPos:Destroy() end) R.FlyPos = nil end
+    if R.FlyGyro then pcall(function() R.FlyGyro:Destroy() end) R.FlyGyro = nil end
+    if R.FlyBV then pcall(function() R.FlyBV:Destroy() end) R.FlyBV = nil end
+    if not on then
+        char = LocalPlayer.Character
+        if char then
+            local curHum = char:FindFirstChild("Humanoid")
+            if curHum then curHum.PlatformStand = false end
+        end
+        return
+    end
+    if S.CarFlyEnabled then _RawSetCarFly(false) end
+    char = LocalPlayer.Character
+    root = char and char:FindFirstChild("HumanoidRootPart")
+    local curHum = char and char:FindFirstChild("Humanoid")
+    if not root or not curHum then return end
+    local flyMethod = S.ForceSpeedEnabled and S.ForceSpeedMethod or 0
+    if flyMethod == 2 then
+        -- CFrame метод: движение через CFrame напрямую
+    elseif flyMethod == 3 then
+        R.FlyBV = Instance.new("BodyVelocity")
+        R.FlyBV.Name = "_FlyBV"
+        R.FlyBV.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+        R.FlyBV.Velocity = Vector3.zero
+        R.FlyBV.P = 10000
+        R.FlyBV.Parent = root
+        R.FlyGyro = Instance.new("BodyGyro")
+        R.FlyGyro.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+        R.FlyGyro.P = 10000
+        R.FlyGyro.D = 1000
+        R.FlyGyro.Parent = root
+    elseif flyMethod == 4 then
+        R.FlyBV = Instance.new("BodyVelocity")
+        R.FlyBV.Name = "_FlyBV"
+        R.FlyBV.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+        R.FlyBV.Velocity = Vector3.zero
+        R.FlyBV.P = 10000
+        R.FlyBV.Parent = root
+        R.FlyGyro = Instance.new("BodyGyro")
+        R.FlyGyro.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+        R.FlyGyro.P = 10000
+        R.FlyGyro.D = 1000
+        R.FlyGyro.Parent = root
+    else
+        R.FlyPos = Instance.new("BodyPosition")
+        R.FlyPos.Position = root.Position
+        R.FlyPos.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+        R.FlyPos.P = 10000
+        R.FlyPos.D = 1000
+        R.FlyPos.Parent = root
+        R.FlyGyro = Instance.new("BodyGyro")
+        R.FlyGyro.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+        R.FlyGyro.P = 10000
+        R.FlyGyro.D = 1000
+        R.FlyGyro.Parent = root
+    end
+    curHum.PlatformStand = true
+end
+
+_RawSetCarFly = function(on)
+    S.CarFlyEnabled = on
+    if R.CarFlyConn then R.CarFlyConn:Disconnect() R.CarFlyConn=nil end
+    if R.CarFlyBV then R.CarFlyBV:Destroy() R.CarFlyBV=nil end
+    if R.CarFlyBG then R.CarFlyBG:Destroy() R.CarFlyBG=nil end
+    if not on then return end
+    if S.FlyEnabled then _RawSetFly(false) end
+    local c = LocalPlayer.Character
+    if not c then return end
+    local hrp = c:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    local bv = Instance.new("BodyVelocity")
+    bv.MaxForce=Vector3.new(math.huge,math.huge,math.huge)
+    bv.Velocity=Vector3.zero bv.Parent=hrp
+    R.CarFlyBV=bv
+    local bg = Instance.new("BodyGyro")
+    bg.MaxTorque=Vector3.new(math.huge,math.huge,math.huge)
+    bg.D=5000 bg.P=100000 bg.CFrame=Camera.CFrame bg.Parent=hrp
+    R.CarFlyBG=bg
+    R.CarFlyConn = Services.RunService.RenderStepped:Connect(function()
+        if not S.CarFlyEnabled or not hrp or not hrp.Parent then _RawSetCarFly(false) return end
+        bg.CFrame=Camera.CFrame
+        local hum = c:FindFirstChildOfClass("Humanoid")
+        if hum then
+            local moveDir = hum.MoveDirection
+            if moveDir.Magnitude > 0 then
+                local camCF = Camera.CFrame
+                local speed = S.CarFlySpeed
+                local dir   = camCF:VectorToObjectSpace(moveDir*speed)
+                local worldDir = camCF:VectorToWorldSpace(Vector3.new(dir.X,0,dir.Z).Unit*speed)
+                bv.Velocity = worldDir
+            else bv.Velocity=Vector3.zero end
+        else bv.Velocity=Vector3.zero end
+    end)
+end
+
+SetFly = function(on)
+    if on and WaterBlock.Enabled then
+        Notify("Anti-Fly", "Fly blocked: Water Block is active", 3)
+        return
+    end
+    _RawSetFly(on)
+end
+
+-- ИСПРАВЛЕНО: одно определение SetCarFly без дублирования
+SetCarFly = function(on)
+    if on and S.ForceSpeedEnabled then
+        Notify("Anti-Fly", "Car Fly blocked: ForceSpeed is active", 3)
+        return
+    end
+    if on and WaterBlock.Enabled then
+        Notify("Anti-Fly", "Car Fly blocked: Water Block is active", 3)
+        return
+    end
+    _RawSetCarFly(on)
+end
+
 SetAntiSlip = function(on)
     S.AntiSlipEnabled = on
-
-    if R.AntiSlipConn then
-        R.AntiSlipConn:Disconnect()
-        R.AntiSlipConn = nil
-    end
-
+    if R.AntiSlipConn then R.AntiSlipConn:Disconnect() R.AntiSlipConn=nil end
     if not on then return end
-
     R.AntiSlipConn = Services.RunService.Heartbeat:Connect(function()
         local c = LocalPlayer.Character
         if not c then return end
-
         local hrp = c:FindFirstChild("HumanoidRootPart")
         local hum = c:FindFirstChildOfClass("Humanoid")
-
         if not hrp or not hum then return end
         if hum.Health <= 0 then return end
         if hum.Sit then return end
         if S.FlyEnabled or S.CarFlyEnabled then return end
-
         local moveDir = hum.MoveDirection
         local vel = hrp.AssemblyLinearVelocity
-
-        -- только при остановке
         if S.AntiSlipMode == "StopOnly" then
             if moveDir.Magnitude < 0.05 then
-                hrp.AssemblyLinearVelocity = Vector3.new(
-                    0,
-                    vel.Y,
-                    0
-                )
+                hrp.AssemblyLinearVelocity = Vector3.new(0, vel.Y, 0)
             end
-
-        -- полный анти-слип
         elseif S.AntiSlipMode == "Full" then
             if moveDir.Magnitude < 0.05 then
-                hrp.AssemblyLinearVelocity = Vector3.new(
-                    0,
-                    vel.Y,
-                    0
-                )
+                hrp.AssemblyLinearVelocity = Vector3.new(0, vel.Y, 0)
             else
                 local target = moveDir.Unit * hum.WalkSpeed
-
-                hrp.AssemblyLinearVelocity = Vector3.new(
-                    target.X,
-                    vel.Y,
-                    target.Z
-                )
+                hrp.AssemblyLinearVelocity = Vector3.new(target.X, vel.Y, target.Z)
             end
         end
     end)
@@ -1235,23 +1534,15 @@ end
 
 local function SetEspNPC(on)
     S.EspNPCEnabled = on
-
-    if on then
-        NPCTracker:Rescan()
-    end
-
+    if on then NPCTracker:Rescan() end
     for chr, data in pairs(ESP.Tracked) do
         if data.IsNPC then
             if on then
                 ESP:UpdateDraw(chr, data, chr == R.LockedTarget)
                 ESP:UpdateHL(chr, data, chr == R.LockedTarget)
             else
-                ESP:RemoveDraw(chr)
-                ESP:CreateDraw(chr)
-
-                if data.Highlight then
-                    data.Highlight.Enabled = false
-                end
+                ESP:RemoveDraw(chr) ESP:CreateDraw(chr)
+                if data.Highlight then data.Highlight.Enabled = false end
             end
         end
     end
@@ -1281,76 +1572,29 @@ local function SetFullBright(on)
     if on then FullBright:Apply() else FullBright:Remove() end
 end
 
+local OriginalCollisions = {}
+
 SetNoClip = function(on)
     S.NoClipEnabled = on
-    if not on then
+    SyncUI("NoClipEnabled", on)
+    if on then
         for _, part in ipairs(R.CharParts) do
             if part and part.Parent and part:IsA("BasePart") then
-                part.CanCollide = true
+                if OriginalCollisions[part] == nil then
+                    OriginalCollisions[part] = part.CanCollide
+                end
+                part.CanCollide = false
+            end
+        end
+    else
+        for _, part in ipairs(R.CharParts) do
+            if part and part.Parent and part:IsA("BasePart") then
+                if OriginalCollisions[part] ~= nil then
+                    part.CanCollide = OriginalCollisions[part]
+                end
             end
         end
     end
-end
-
-SetCarFly = function(on)
-    S.CarFlyEnabled = on
-    if R.CarFlyConn then R.CarFlyConn:Disconnect() R.CarFlyConn=nil end
-    if R.CarFlyBV then R.CarFlyBV:Destroy() R.CarFlyBV=nil end
-    if R.CarFlyBG then R.CarFlyBG:Destroy() R.CarFlyBG=nil end
-    if not on then return end
-    if S.FlyEnabled then SetFly(false) end
-    local c = LocalPlayer.Character
-    if not c then return end
-    local hrp = c:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-    local bv = Instance.new("BodyVelocity")
-    bv.MaxForce=Vector3.new(math.huge,math.huge,math.huge)
-    bv.Velocity=Vector3.zero bv.Parent=hrp
-    R.CarFlyBV=bv
-    local bg = Instance.new("BodyGyro")
-    bg.MaxTorque=Vector3.new(math.huge,math.huge,math.huge)
-    bg.D=5000 bg.P=100000 bg.CFrame=Camera.CFrame bg.Parent=hrp
-    R.CarFlyBG=bg
-    R.CarFlyConn = Services.RunService.RenderStepped:Connect(function()
-        if not S.CarFlyEnabled or not hrp or not hrp.Parent then SetCarFly(false) return end
-        bg.CFrame=Camera.CFrame
-        local hum = c:FindFirstChildOfClass("Humanoid")
-        if hum then
-            local moveDir = hum.MoveDirection
-            if moveDir.Magnitude > 0 then
-                local camCF = Camera.CFrame
-                local speed = S.CarFlySpeed
-                local dir   = camCF:VectorToObjectSpace(moveDir*speed)
-                local worldDir = camCF:VectorToWorldSpace(Vector3.new(dir.X,0,dir.Z).Unit*speed)
-                bv.Velocity = worldDir
-            else bv.Velocity=Vector3.zero end
-        else bv.Velocity=Vector3.zero end
-    end)
-end
-
-SetFly = function(on)
-    S.FlyEnabled = on
-    if R.FlyPos then R.FlyPos:Destroy() R.FlyPos=nil end
-    if R.FlyGyro then R.FlyGyro:Destroy() R.FlyGyro=nil end
-    if not on then
-        if char and char:FindFirstChild("Humanoid") then
-            char.Humanoid.PlatformStand=false
-        end
-        return
-    end
-    if S.CarFlyEnabled then SetCarFly(false) end
-    char=LocalPlayer.Character
-    root=char and char:FindFirstChild("HumanoidRootPart")
-    local curHum = char and char:FindFirstChild("Humanoid")
-    if not root or not curHum then return end
-    R.FlyPos=Instance.new("BodyPosition")
-    R.FlyPos.Position=root.Position
-    R.FlyPos.MaxForce=Vector3.new(math.huge,math.huge,math.huge)
-    R.FlyPos.P=10000 R.FlyPos.D=1000 R.FlyPos.Parent=root
-    R.FlyGyro=Instance.new("BodyGyro")
-    R.FlyGyro.MaxTorque=Vector3.new(math.huge,math.huge,math.huge)
-    R.FlyGyro.P=10000 R.FlyGyro.D=1000 R.FlyGyro.Parent=root
-    curHum.PlatformStand=true
 end
 
 SetForceApply = function(on)
@@ -1369,9 +1613,7 @@ SetForceApply = function(on)
                     if hum.UseJumpPower == false then hum.UseJumpPower = true end
                 end
             end
-            if Camera.FieldOfView ~= S.CameraFOV then
-                Camera.FieldOfView = S.CameraFOV
-            end
+            if Camera.FieldOfView ~= S.CameraFOV then Camera.FieldOfView = S.CameraFOV end
         end)
     end)
 end
@@ -1386,6 +1628,7 @@ end
 local function CleanupForceSpeed()
     if R.ForceBV then R.ForceBV:Destroy() R.ForceBV=nil end
 end
+
 local function ApplyForceSpeed()
     local c = LocalPlayer.Character
     if not c then return end
@@ -1397,7 +1640,7 @@ local function ApplyForceSpeed()
     if hum.Sit then return end
     local moveDir = hum.MoveDirection
     if moveDir.Magnitude < 0.1 then
-        if R.ForceBV and R.ForceBV.Parent then R.ForceBV.Velocity=Vector3.zero end
+        if R.ForceBV and R.ForceBV.Parent then R.ForceBV.Velocity = Vector3.zero end
         return
     end
     local targetVel = moveDir.Unit * S.ForceSpeedValue
@@ -1407,34 +1650,37 @@ local function ApplyForceSpeed()
         hrp.Velocity = Vector3.new(targetVel.X, currentY, targetVel.Z)
     end
     if m == 2 or m == 4 then
-        local delta = moveDir.Unit * (S.ForceSpeedValue/60)
-        hrp.CFrame = hrp.CFrame + Vector3.new(delta.X,0,delta.Z)
+        local delta = moveDir.Unit * (S.ForceSpeedValue / 60)
+        hrp.CFrame = hrp.CFrame + Vector3.new(delta.X, 0, delta.Z)
     end
     if m == 3 or m == 4 then
         if not R.ForceBV or not R.ForceBV.Parent then
             R.ForceBV = Instance.new("BodyVelocity")
-            R.ForceBV.Name="_ForceSpeed"
-            R.ForceBV.MaxForce=Vector3.new(math.huge,0,math.huge)
-            R.ForceBV.P=10000 R.ForceBV.Parent=hrp
+            R.ForceBV.Name = "_ForceSpeed"
+            R.ForceBV.MaxForce = Vector3.new(math.huge, 0, math.huge)
+            R.ForceBV.P = 10000
+            R.ForceBV.Parent = hrp
         end
-        R.ForceBV.Velocity = Vector3.new(targetVel.X,0,targetVel.Z)
+        R.ForceBV.Velocity = Vector3.new(targetVel.X, 0, targetVel.Z)
     else
-        if R.ForceBV and R.ForceBV.Parent and m ~= 4 then R.ForceBV.Velocity=Vector3.zero end
+        if R.ForceBV and R.ForceBV.Parent and m ~= 4 then R.ForceBV.Velocity = Vector3.zero end
     end
 end
+
 SetForceSpeed = function(on)
     S.ForceSpeedEnabled = on
-    if R.ForceSpeedConn then R.ForceSpeedConn:Disconnect() R.ForceSpeedConn=nil end
+    if R.ForceSpeedConn then R.ForceSpeedConn:Disconnect() R.ForceSpeedConn = nil end
     CleanupForceSpeed()
+    if S.FlyEnabled then
+        _RawSetFly(true)
+    end
     if not on then return end
     R.ForceSpeedConn = Services.RunService.Heartbeat:Connect(function()
-        if S.ForceSpeedEnabled then pcall(ApplyForceSpeed) end
+        if not S.ForceSpeedEnabled then return end
+        pcall(ApplyForceSpeed)
     end)
 end
 
--- ════════════════════════════════════════════════
---          SHIFT LOCK
--- ════════════════════════════════════════════════
 local SHIFT_MAX_LENGTH = 900000
 local SHIFT_ENABLED_OFFSET = CFrame.new(1.7, 0, 0)
 local SHIFT_DISABLED_OFFSET = CFrame.new(-1.7, 0, 0)
@@ -1489,7 +1735,6 @@ local function CreateMobileShiftButton()
     gui.IgnoreGuiInset=true gui.DisplayOrder=9
     gui.Parent=Services.CoreGui
     R.MobileShiftGui=gui
-
     local btn = Instance.new("ImageButton")
     btn.Name="MobileShiftLock"
     btn.Size=UDim2.new(0,55,0,55)
@@ -1500,18 +1745,14 @@ local function CreateMobileShiftButton()
     btn.AutoButtonColor=false
     btn.Parent=gui
     R.MobileShiftBtn=btn
-
     local touching,moved=false,false
     local startTP,startBP=nil,nil
-
     local changeListener, endListener
-
     btn.InputBegan:Connect(function(input)
         if input.UserInputType==Enum.UserInputType.Touch or input.UserInputType==Enum.UserInputType.MouseButton1 then
             touching=true moved=false startTP=input.Position startBP=btn.Position
         end
     end)
-
     changeListener = function(input)
         if touching and (input.UserInputType==Enum.UserInputType.Touch or input.UserInputType==Enum.UserInputType.MouseMovement) then
             local delta=input.Position-startTP
@@ -1525,13 +1766,9 @@ local function CreateMobileShiftButton()
     end
     endListener = function(input)
         if input.UserInputType==Enum.UserInputType.Touch or input.UserInputType==Enum.UserInputType.MouseButton1 then
-            if touching then
-                touching=false
-                if not moved then ToggleShiftLockState() end
-            end
+            if touching then touching=false if not moved then ToggleShiftLockState() end end
         end
     end
-
     AddInputListener("Changed", changeListener)
     AddInputListener("Ended", endListener)
     R.MobileShiftListeners = {Changed=changeListener, Ended=endListener}
@@ -1565,9 +1802,7 @@ SetShiftLock = function(on)
         local ok = pcall(function() LocalPlayer.DevEnableMouseLock = true end)
         if ok then Notify("Shift Lock","! Was unlocked!",4)
         else Notify("Shift Lock","! Failed to unlock",4) end
-    else
-        Notify("Shift Lock","! Already unlocked",2)
-    end
+    else Notify("Shift Lock","! Already unlocked",2) end
     if isMobile then
         CreateMobileShiftButton()
         pcall(function()
@@ -1591,16 +1826,12 @@ SetShiftLock = function(on)
     end
 end
 
--- ════════════════════════════════════════════════
---          SCAFFOLD
--- ════════════════════════════════════════════════
 SetScaffold = function(on)
     S.ScaffoldEnabled = on
     if R.ScaffoldConn then R.ScaffoldConn:Disconnect() R.ScaffoldConn=nil end
     if R.ScaffoldPart and R.ScaffoldPart.Parent then pcall(function() R.ScaffoldPart:Destroy() end) end
     R.ScaffoldPart = nil
     if not on then return end
-
     local part = Instance.new("Part")
     part.Name = "DivaScaffold"
     part.Size = Vector3.new(S.ScaffoldX, S.ScaffoldY, S.ScaffoldZ)
@@ -1616,57 +1847,41 @@ SetScaffold = function(on)
     part.BottomSurface = Enum.SurfaceType.Smooth
     part.Parent = workspace
     R.ScaffoldPart = part
-
     R.ScaffoldConn = Services.RunService.RenderStepped:Connect(function()
         if not S.ScaffoldEnabled then return end
-        if not R.ScaffoldPart or not R.ScaffoldPart.Parent then
-            R.ScaffoldPart = nil
-            return
-        end
+        if not R.ScaffoldPart or not R.ScaffoldPart.Parent then R.ScaffoldPart=nil return end
         local c = LocalPlayer.Character
         if not c then return end
         local hrp = c:FindFirstChild("HumanoidRootPart")
         if not hrp then return end
         local hum = c:FindFirstChildOfClass("Humanoid")
         if not hum then return end
-
         local desiredSize = Vector3.new(S.ScaffoldX, S.ScaffoldY, S.ScaffoldZ)
-        if R.ScaffoldPart.Size ~= desiredSize then
-            R.ScaffoldPart.Size = desiredSize
-        end
-
+        if R.ScaffoldPart.Size ~= desiredSize then R.ScaffoldPart.Size = desiredSize end
         local hipHeight = hum.HipHeight or 2
         local rootHeight = hrp.Size.Y * 0.5
         local yOffset = -(hipHeight + rootHeight + S.ScaffoldY * 0.5)
-
-        R.ScaffoldPart.CFrame = CFrame.new(
-            hrp.Position.X,
-            hrp.Position.Y + yOffset,
-            hrp.Position.Z
-        )
+        R.ScaffoldPart.CFrame = CFrame.new(hrp.Position.X, hrp.Position.Y + yOffset, hrp.Position.Z)
     end)
 end
 
--- ════════════════════════════════════════════════
---          TRIGGERBOT
--- ════════════════════════════════════════════════
 local function FireTriggerKey()
     local kt = S.TriggerbotKey
     pcall(function()
         if kt == "MouseButton1" then
-            Services.VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+            Services.VirtualInputManager:SendMouseButtonEvent(0,0,0,true,game,0)
             task.wait()
-            Services.VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+            Services.VirtualInputManager:SendMouseButtonEvent(0,0,0,false,game,0)
         elseif kt == "MouseButton2" then
-            Services.VirtualInputManager:SendMouseButtonEvent(0, 0, 1, true, game, 0)
+            Services.VirtualInputManager:SendMouseButtonEvent(0,0,1,true,game,0)
             task.wait()
-            Services.VirtualInputManager:SendMouseButtonEvent(0, 0, 1, false, game, 0)
+            Services.VirtualInputManager:SendMouseButtonEvent(0,0,1,false,game,0)
         else
             local keyCode = Enum.KeyCode[kt]
             if keyCode then
-                Services.VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
+                Services.VirtualInputManager:SendKeyEvent(true,keyCode,false,game)
                 task.wait()
-                Services.VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
+                Services.VirtualInputManager:SendKeyEvent(false,keyCode,false,game)
             end
         end
     end)
@@ -1676,15 +1891,12 @@ SetTriggerbot = function(on)
     S.TriggerbotEnabled = on
     if not on then return end
     if R.TriggerbotRunning then return end
-
     R.TriggerbotRunning = true
     task.spawn(function()
         while S.TriggerbotEnabled do
             if R.LockedTarget then
                 local hum = R.LockedTarget:FindFirstChildOfClass("Humanoid")
-                if hum and hum.Health > 0 then
-                    FireTriggerKey()
-                end
+                if hum and hum.Health > 0 then FireTriggerKey() end
             end
             task.wait(math.max(S.TriggerbotDelay, 0.05))
         end
@@ -1692,13 +1904,9 @@ SetTriggerbot = function(on)
     end)
 end
 
--- ════════════════════════════════════════════════
---          SAVE/LOAD
--- ════════════════════════════════════════════════
 local function GetSlotFile(slot) return R.SaveDir.."/d_"..slot..".json" end
 local SaveLoad = {}
-
-local SyncUIFromSettings -- forward declaration
+local SyncUIFromSettings
 
 function SaveLoad:EnsureDir()
     pcall(function() if not isfolder(R.SaveDir) then makefolder(R.SaveDir) end end)
@@ -1706,17 +1914,13 @@ end
 function SaveLoad:GetData()
     local d = {}
     for k, v in pairs(S) do
-        if type(v) ~= "userdata" and type(v) ~= "function" and type(v) ~= "table" then
-            d[k] = v
-        end
+        if type(v) ~= "userdata" and type(v) ~= "function" and type(v) ~= "table" then d[k] = v end
     end
     d.TriggerWords = S.TriggerWords
     d.AntiStates = {}
     for k, v in pairs(AS) do d.AntiStates[k]=v end
     d.AntiThingAdded = {}
-    for _, entry in ipairs(AntiThingAdded) do
-        table.insert(d.AntiThingAdded, entry.Key)
-    end
+    for _, entry in ipairs(AntiThingAdded) do table.insert(d.AntiThingAdded, entry.Key) end
     return d
 end
 function SaveLoad:Save()
@@ -1734,22 +1938,13 @@ function SaveLoad:Load()
     pcall(function()
         if not isfile(fn) then Notify("Save","Slot empty",2) return end
         local d = Services.HttpService:JSONDecode(readfile(fn))
-        for k, v in pairs(d) do
-            if S[k] ~= nil then S[k]=v end
-        end
-        if d.AntiStates then
-            for k, v in pairs(d.AntiStates) do
-                if AS[k] ~= nil then AS[k] = v end
-            end
-        end
+        for k, v in pairs(d) do if S[k] ~= nil then S[k]=v end end
+        if d.AntiStates then for k, v in pairs(d.AntiStates) do if AS[k] ~= nil then AS[k]=v end end end
         if d.AntiThingAdded then
             AntiThingAdded = {}
             for _, key in ipairs(d.AntiThingAdded) do
                 for _, entry in ipairs(AntiStateList) do
-                    if entry.Key == key then
-                        table.insert(AntiThingAdded, entry)
-                        break
-                    end
+                    if entry.Key==key then table.insert(AntiThingAdded, entry) break end
                 end
             end
         end
@@ -1757,14 +1952,11 @@ function SaveLoad:Load()
             task.wait(0.15)
             if SyncUIFromSettings then SyncUIFromSettings() end
             if humanoid and humanoid.Parent then
-                humanoid.WalkSpeed = S.WalkSpeed
-                humanoid.JumpPower = S.JumpPower
+                humanoid.WalkSpeed=S.WalkSpeed humanoid.JumpPower=S.JumpPower
             end
-            Camera.FieldOfView = S.CameraFOV
-            FOVCircle.Radius = S.FOV
-            FOVCircle.Color = S.TargetColor
-            ApplyZoomLimits()
-            ApplyAntiStates()
+            Camera.FieldOfView=S.CameraFOV
+            FOVCircle.Radius=S.FOV FOVCircle.Color=S.TargetColor
+            ApplyZoomLimits() ApplyAntiStates()
         end)
         Notify("Save","Slot "..R.CurSlot.." loaded!",3)
     end)
@@ -1786,9 +1978,59 @@ function SaveLoad:StartAutoLoop()
     end)
 end
 
--- ════════════════════════════════════════════════
---          CHARACTER TRACKING
--- ════════════════════════════════════════════════
+-- ИСПРАВЛЕНО: HookHumanoid определён ДО CharacterAdded
+local function HookHumanoid(hum)
+    if not hum then return end
+    hum:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
+        -- Срабатывает ТОЛЬКО если Sync включён и Force Apply выключен
+        if S.GameSyncEnabled and not S.ForceApplyEnabled then
+            local newVal = hum.WalkSpeed
+            if math.abs(newVal - S.WalkSpeed) > 0.1 then
+                S.WalkSpeed = newVal
+                if UIRefs.Sliders["WalkSpeed"] then
+                    pcall(function() UIRefs.Sliders["WalkSpeed"]:Set(newVal, true) end)
+                end
+            end
+        end
+    end)
+    hum:GetPropertyChangedSignal("JumpPower"):Connect(function()
+        if S.GameSyncEnabled and not S.ForceApplyEnabled then
+            local newVal = hum.JumpPower
+            if math.abs(newVal - S.JumpPower) > 0.1 then
+                S.JumpPower = newVal
+                if UIRefs.Sliders["JumpPower"] then
+                    pcall(function() UIRefs.Sliders["JumpPower"]:Set(newVal, true) end)
+                end
+            end
+        end
+    end)
+end
+
+-- Хук на FOV камеры
+local function HookCamera(cam)
+    if not cam then return end
+    cam:GetPropertyChangedSignal("FieldOfView"):Connect(function()
+        if S.GameSyncEnabled and not S.ForceApplyEnabled and cam == workspace.CurrentCamera then
+            local newVal = cam.FieldOfView
+            if math.abs(newVal - S.CameraFOV) > 0.1 then
+                S.CameraFOV = newVal
+                if UIRefs.Sliders["CameraFOV"] then
+                    pcall(function() UIRefs.Sliders["CameraFOV"]:Set(newVal, true) end)
+                end
+            end
+        end
+    end)
+end
+
+HookCamera(workspace.CurrentCamera)
+-- Подключаем хук к humanoid при старте (уже существующий персонаж)
+if humanoid then HookHumanoid(humanoid) end
+
+workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
+    Camera = workspace.CurrentCamera
+    HookCamera(workspace.CurrentCamera)
+end)
+
 local function TrackCharacter(chr, player)
     if not chr or chr == LocalPlayer.Character then return end
     task.spawn(function()
@@ -1835,26 +2077,36 @@ LocalPlayer.CharacterAdded:Connect(function(nc)
     char=nc root=nc:WaitForChild("HumanoidRootPart",5)
     humanoid=nc:WaitForChild("Humanoid",5)
     task.wait(0.5)
+    -- ИСПРАВЛЕНО: HookHumanoid уже определена выше, вызов работает
+    if humanoid then
+        HookHumanoid(humanoid)
+    end
     UpdateCharCache(nc)
     ApplyAntiStates()
     if S.FlyEnabled then SetFly(true) end
     if S.CarFlyEnabled then task.wait(0.3) SetCarFly(true) end
     if S.XrayEnabled then SetXray(true) end
     if humanoid and humanoid.Parent then
-        humanoid.WalkSpeed=S.WalkSpeed
-        humanoid.JumpPower=S.JumpPower
+        humanoid.WalkSpeed=S.WalkSpeed humanoid.JumpPower=S.JumpPower
     end
     Camera.FieldOfView=S.CameraFOV
     ApplyZoomLimits()
     if S.ShiftLockEnabled and R.ShiftLockActive then
-        R.ShiftLockActive:Disconnect()
-        R.ShiftLockActive = nil
+        R.ShiftLockActive:Disconnect() R.ShiftLockActive=nil
         UpdateMobileShiftIcon("OFF")
     end
     if S.ScaffoldEnabled then
-        task.wait(0.3)
-        SetScaffold(false)
-        SetScaffold(true)
+        task.wait(0.3) SetScaffold(false) SetScaffold(true)
+    end
+    if WaterBlock.Enabled then
+        task.wait(0.5)
+        WB_FindWaterParts()
+        local hum = nc:FindFirstChildOfClass("Humanoid")
+        if hum then
+            if WaterBlock.WalkOnWater or WaterBlock.SwimUnder then
+                WB_BlockSwim(hum, true)
+            end
+        end
     end
     if R.FlingInvis then
         task.wait(0.2)
@@ -1867,39 +2119,70 @@ end)
 
 Services.UserInputService.InputBegan:Connect(function(input, gp)
     if gp then return end
-    if input.KeyCode==Enum.KeyCode.F then SetFly(not S.FlyEnabled) end
-    if input.KeyCode==Enum.KeyCode.N then SetNoClip(not S.NoClipEnabled) end
+    if input.KeyCode == Enum.KeyCode.F then SetFly(not S.FlyEnabled) end
+    if input.KeyCode == Enum.KeyCode.N then SetNoClip(not S.NoClipEnabled) end
 end)
 
--- ════════════════════════════════════════════════
---          MAIN LOOP
--- ════════════════════════════════════════════════
 local Main = {}
 function Main:Init()
     Scheduler:Register("noclip", function()
         if S.NoClipEnabled then
             for _, part in ipairs(R.CharParts) do
-                if part and part.Parent and part.CanCollide then
-                    part.CanCollide=false
+                if part and part.Parent and part:IsA("BasePart") then
+                    part.CanCollide = false
                 end
             end
         end
     end)
     Scheduler:Register("fly", function()
-        if S.FlyEnabled and R.FlyPos and R.FlyGyro and root and root.Parent then
-            local curHum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid")
-            if curHum and curHum.Health > 0 then
-                local speed=S.FlySpeed
-                local cf=Camera.CFrame.Rotation
-                local dir=cf:VectorToObjectSpace(curHum.MoveDirection*speed)
-                local direction
-                if dir.Magnitude==0 then direction=Vector3.zero
-                else direction=cf:VectorToWorldSpace(Vector3.new(dir.X,0,dir.Z).Unit*dir.Magnitude) end
-                if R.FlyPos.Parent then R.FlyPos.Position=R.FlyPos.Position+direction end
-                if R.FlyGyro.Parent then R.FlyGyro.CFrame=Camera.CFrame end
-                curHum.PlatformStand=true
+        if not S.FlyEnabled then return end
+        char = LocalPlayer.Character
+        root = char and char:FindFirstChild("HumanoidRootPart")
+        local curHum = char and char:FindFirstChildOfClass("Humanoid")
+        if not root or not root.Parent or not curHum or curHum.Health <= 0 then return end
+        local speed = S.FlySpeed
+        local cf = Camera.CFrame
+        local moveDir = curHum.MoveDirection
+        local direction
+        if moveDir.Magnitude > 0 then
+            local dir = cf.Rotation:VectorToObjectSpace(moveDir * speed)
+            direction = cf.Rotation:VectorToWorldSpace(Vector3.new(dir.X, 0, dir.Z).Unit * dir.Magnitude)
+        else
+            direction = Vector3.zero
+        end
+        local flyMethod = S.ForceSpeedEnabled and S.ForceSpeedMethod or 0
+        if flyMethod == 2 then
+            if direction.Magnitude > 0 then
+                root.CFrame = root.CFrame + direction * (1/60)
+            end
+            root.CFrame = CFrame.new(root.Position) * cf.Rotation
+            root.Velocity = Vector3.zero
+            root.RotVelocity = Vector3.zero
+        elseif flyMethod == 3 then
+            if R.FlyBV and R.FlyBV.Parent then
+                R.FlyBV.Velocity = direction
+            end
+            if R.FlyGyro and R.FlyGyro.Parent then
+                R.FlyGyro.CFrame = cf
+            end
+        elseif flyMethod == 4 then
+            root.Velocity = direction
+            root.CFrame = CFrame.new(root.Position) * cf.Rotation
+            if R.FlyBV and R.FlyBV.Parent then
+                R.FlyBV.Velocity = direction
+            end
+            if R.FlyGyro and R.FlyGyro.Parent then
+                R.FlyGyro.CFrame = cf
+            end
+        else
+            if R.FlyPos and R.FlyPos.Parent then
+                R.FlyPos.Position = R.FlyPos.Position + direction
+            end
+            if R.FlyGyro and R.FlyGyro.Parent then
+                R.FlyGyro.CFrame = cf
             end
         end
+        curHum.PlatformStand = true
     end)
     Scheduler:Register("flinginvis", function()
         if R.FlingInvis then
@@ -1930,7 +2213,7 @@ function Main:GetClosest()
                     local part = c:FindFirstChild(S.TargetPart)
                     local hum  = c:FindFirstChildOfClass("Humanoid")
                     if part and hum and hum.Health > 0 then
-                        local inHB    = S.HitboxEnabled and Hitbox:IsInside(part.Position)
+                        local inHB = S.HitboxEnabled and Hitbox:IsInside(part.Position)
                         local pos, on = Camera:WorldToViewportPoint(part.Position)
                         if on then
                             local d = (Vector2.new(pos.X,pos.Y)-center).Magnitude
@@ -1961,13 +2244,13 @@ function Main:GetClosest()
 end
 
 function Main:AimUpdate()
+    local Camera = workspace.CurrentCamera
     if not S.Enabled and not S.TargetNPCs then
         if R.LockedTarget then SetLocked(nil) end
         if Services.UserInputService.MouseDeltaSensitivity ~= 1 then
             Services.UserInputService.MouseDeltaSensitivity=1
         end
-        R.MobileAiming=false
-        return
+        R.MobileAiming=false return
     end
     local isAiming = false
     if isMobile then isAiming = R.MobileAiming == true
@@ -2017,14 +2300,13 @@ end
 
 function Main:Destroy()
     Services.UserInputService.MouseDeltaSensitivity=1
-    if R.AntiSlipConn then R.AntiSlipConn:Disconnect() R.AntiSlipConn = nil end
+    if R.AntiSlipConn then R.AntiSlipConn:Disconnect() R.AntiSlipConn=nil end
+    SetWaterBlock(false)
     ESP:Destroy() Hitbox:Destroy() NPCTracker:Destroy()
     FullBright:Remove() Xray:Remove() NoTex:RestoreAll() NoTex:Cleanup()
-    SetForceSpeed(false)
-    SetShiftLock(false)
-    SetForceApply(false)
-    SetScaffold(false)
-    SetTriggerbot(false)
+    SetForceSpeed(false) SetShiftLock(false)
+    if R.FlyBV then pcall(function() R.FlyBV:Destroy() end) R.FlyBV = nil end
+    SetForceApply(false) SetScaffold(false) SetTriggerbot(false)
     DrawPool:Clear()
     pcall(function() FOVCircle:Remove() end)
     if R.RenderName then
@@ -2046,9 +2328,6 @@ function Main:Destroy()
     pcall(function() GlobalHLFolder:Destroy() end)
 end
 
--- ════════════════════════════════════════════════
---          UI
--- ════════════════════════════════════════════════
 local Window = DivaUI:CreateWindow({
     Name  = "DIVA HACKS",
     Theme = "Midnight",
@@ -2056,134 +2335,163 @@ local Window = DivaUI:CreateWindow({
 })
 Window:CreateCustomizePanel()
 
--- 🔥 РЕЕСТР UI ЭЛЕМЕНТОВ
-local UIRefs = {
-    Toggles  = {},
-    Sliders  = {},
-    Dropdowns = {},
-    ColorPickers = {},
-    AntiManager = nil,
-}
+SyncUI = function(key, value)
+    if not UIRefs or not UIRefs.Toggles then return end
+    local toggle = UIRefs.Toggles[key]
+    if toggle and toggle.Set then
+        pcall(function()
+            toggle:Set(value, true)
+        end)
+    end
+end
 
-local function RegToggle(key, obj)    UIRefs.Toggles[key] = obj end
-local function RegSlider(key, obj)    UIRefs.Sliders[key] = obj end
-local function RegDropdown(key, obj)  UIRefs.Dropdowns[key] = obj end
-local function RegColor(key, obj)     UIRefs.ColorPickers[key] = obj end
+local function RegToggle(key, obj)   UIRefs.Toggles[key] = obj end
+local function RegSlider(key, obj)   UIRefs.Sliders[key] = obj end
+local function RegDropdown(key, obj) UIRefs.Dropdowns[key] = obj end
+local function RegColor(key, obj)    UIRefs.ColorPickers[key] = obj end
+
+local function ForceToggleVisual(toggleObj, name, state, theme)
+    if not toggleObj or not toggleObj.Instance then return end
+    local btn = toggleObj.Instance
+    if not btn or not btn.Parent then return end
+    local bg = state and theme.ButtonOn or theme.ButtonOff
+    btn.BackgroundColor3 = bg
+    local lum = bg.R*0.299 + bg.G*0.587 + bg.B*0.114
+    btn.TextColor3 = lum > 0.62 and Color3.fromRGB(20,20,24) or Color3.fromRGB(245,245,245)
+    btn.Text = name..": "..(state and "ON" or "OFF")
+end
+
+local function CreateFixedToggle(tab, name, settingKey, callback)
+    local currentState = S[settingKey] or false
+    local toggle = tab:CreateToggle({
+        Name = name, Default = currentState,
+        Callback = function(v)
+            currentState = v S[settingKey] = v
+            if callback then callback(v) end
+            ForceToggleVisual(toggle, name, v, Window.CurTheme())
+        end
+    })
+    task.defer(function()
+        task.wait(0.05)
+        ForceToggleVisual(toggle, name, currentState, Window.CurTheme())
+    end)
+    local origSet = toggle.Set
+    toggle.Set = function(self, value, silent)
+        local newState = value and true or false
+        currentState = newState S[settingKey] = newState
+        if origSet then pcall(function() origSet(self, newState, true) end) end
+        ForceToggleVisual(self, name, newState, Window.CurTheme())
+        if not silent and callback then task.spawn(function() pcall(callback, newState) end) end
+    end
+    RegToggle(settingKey, toggle)
+    return toggle
+end
+
+local function CreateFixedSlider(tab, name, settingKey, mn, mx, fmt, callback)
+    local currentValue = S[settingKey] or mn
+    local slider = tab:CreateSlider({
+        Name=name, Min=mn, Max=mx, Default=currentValue, Format=fmt,
+        Callback=function(v)
+            currentValue=v S[settingKey]=v
+            if callback then callback(v) end
+        end
+    })
+    RegSlider(settingKey, slider)
+    return slider
+end
+
+local function CreateFixedDropdown(tab, name, settingKey, options, callback)
+    local currentValue = S[settingKey] or options[1]
+    local dropdown = tab:CreateDropdown({
+        Name=name, Options=options, Default=currentValue,
+        Callback=function(v)
+            S[settingKey]=v
+            if callback then callback(v) end
+        end
+    })
+    RegDropdown(settingKey, dropdown)
+    return dropdown
+end
+
+local function CreateFixedColorPicker(tab, name, settingKey, callback)
+    local currentValue = S[settingKey]
+    local picker = tab:CreateColorPicker({
+        Name=name, Default=currentValue,
+        Callback=function(c)
+            S[settingKey]=c
+            if callback then callback(c) end
+        end
+    })
+    RegColor(settingKey, picker)
+    return picker
+end
 
 SyncUIFromSettings = function()
-    -- Сначала обновляем UI визуально (silent=true чтобы не дёргать callback)
     for key, obj in pairs(UIRefs.Toggles) do
-        if S[key] ~= nil and obj and obj.Set then
-            pcall(function() obj:Set(S[key], true) end)
-        end
+        if S[key] ~= nil and obj and obj.Set then pcall(function() obj:Set(S[key], true) end) end
     end
     for key, obj in pairs(UIRefs.Sliders) do
-        if S[key] ~= nil and obj and obj.Set then
-            pcall(function() obj:Set(S[key], true) end)
-        end
+        if S[key] ~= nil and obj and obj.Set then pcall(function() obj:Set(S[key], true) end) end
     end
     for key, obj in pairs(UIRefs.Dropdowns) do
-        if S[key] ~= nil and obj and obj.Set then
-            pcall(function() obj:Set(S[key], true) end)
-        end
+        if S[key] ~= nil and obj and obj.Set then pcall(function() obj:Set(S[key], true) end) end
     end
     for key, obj in pairs(UIRefs.ColorPickers) do
-        if S[key] ~= nil and obj and obj.Set then
-            pcall(function() obj:Set(S[key], true) end)
-        end
+        if S[key] ~= nil and obj and obj.Set then pcall(function() obj:Set(S[key], true) end) end
     end
-    -- Обновляем AntiManager
     if UIRefs.AntiManager and UIRefs.AntiManager.Refresh then
         UIRefs.AntiManager.Added = {}
-        for _, entry in ipairs(AntiThingAdded) do
-            table.insert(UIRefs.AntiManager.Added, entry)
-        end
+        for _, entry in ipairs(AntiThingAdded) do table.insert(UIRefs.AntiManager.Added, entry) end
         UIRefs.AntiManager:Refresh()
     end
-    
-    -- 🔥 ВАЖНО: после обновления UI — применяем игровые эффекты
     task.spawn(function()
-        -- Aim / FOV круг
-        FOVCircle.Visible = S.Enabled or S.TargetNPCs
-        FOVCircle.Radius = S.FOV
-        FOVCircle.Color = S.TargetColor
+        FOVCircle.Visible=S.Enabled or S.TargetNPCs
+        FOVCircle.Radius=S.FOV FOVCircle.Color=S.TargetColor
         ApplyFOVStyle()
-        
-        -- ESP
         if S.EspEnabled then SetEsp(true) else SetEsp(false) end
         if S.EspNPCEnabled then SetEspNPC(S.EspNPCEnabled) end
-        
-        -- World
         if S.XrayEnabled then SetXray(true) else SetXray(false) end
         if S.FullBrightEnabled then SetFullBright(true) else SetFullBright(false) end
-        
-        -- Movement (без перезапуска если уже включено)
         if S.FlyEnabled and not R.FlyPos then SetFly(true) end
         if not S.FlyEnabled and R.FlyPos then SetFly(false) end
         if S.CarFlyEnabled and not R.CarFlyBV then SetCarFly(true) end
         if not S.CarFlyEnabled and R.CarFlyBV then SetCarFly(false) end
-        if S.NoClipEnabled ~= (S.NoClipEnabled and true or false) then SetNoClip(S.NoClipEnabled) end
-        
-        -- Force apply
         if S.ForceApplyEnabled and not R.ForceApplyConn then SetForceApply(true) end
         if not S.ForceApplyEnabled and R.ForceApplyConn then SetForceApply(false) end
-        
-        -- Force speed
         if S.ForceSpeedEnabled and not R.ForceSpeedConn then SetForceSpeed(true) end
         if not S.ForceSpeedEnabled and R.ForceSpeedConn then SetForceSpeed(false) end
-        
-        -- Shift Lock
         if S.ShiftLockEnabled then SetShiftLock(true) end
-        
-        -- Scaffold
         if S.ScaffoldEnabled and not R.ScaffoldPart then SetScaffold(true) end
         if not S.ScaffoldEnabled and R.ScaffoldPart then SetScaffold(false) end
-        
-        -- Triggerbot
         if S.TriggerbotEnabled and not R.TriggerbotRunning then SetTriggerbot(true) end
-        
-        -- Tool Notify
         if S.ToolNotifyEnabled then SetToolNotify(true) end
-        
-        -- Character stats
         local c = LocalPlayer.Character
         if c then
             local hum = c:FindFirstChildOfClass("Humanoid")
-            if hum then
-                hum.WalkSpeed = S.WalkSpeed
-                hum.JumpPower = S.JumpPower
-            end
+            if hum then hum.WalkSpeed=S.WalkSpeed hum.JumpPower=S.JumpPower end
         end
-        Camera.FieldOfView = S.CameraFOV
-        ApplyZoomLimits()
-        ApplyAntiStates()
+        Camera.FieldOfView=S.CameraFOV
+        ApplyZoomLimits() ApplyAntiStates()
     end)
 end
 
--- 🔥 Customize panel: ESP colors
-local custApi = Window._CustomizePanel
+local custApi = Window.CustomizePanel
 if custApi then
     custApi.AddSection("ESP TARGET COLOR")
     custApi.AddSwatchRow(HighlightColors,
         function(i) S.TargetColor=HighlightColors[i].Color FOVCircle.Color=S.TargetColor end,
-        function()
-            for i, hc in ipairs(HighlightColors) do if hc.Color==S.TargetColor then return i end end
-            return 1
-        end
+        function() for i, hc in ipairs(HighlightColors) do if hc.Color==S.TargetColor then return i end end return 1 end
     )
     custApi.AddSection("ESP HEALTH COLOR")
     local healthColors = {
-        {Color=Color3.fromRGB(0,255,0)},   {Color=Color3.fromRGB(100,255,100)},
-        {Color=Color3.fromRGB(255,255,0)},  {Color=Color3.fromRGB(255,165,0)},
-        {Color=Color3.fromRGB(255,80,80)},  {Color=Color3.fromRGB(255,255,255)},
-        {Color=Color3.fromRGB(0,200,255)},  {Color=Color3.fromRGB(180,0,255)},
+        {Color=Color3.fromRGB(0,255,0)},{Color=Color3.fromRGB(100,255,100)},
+        {Color=Color3.fromRGB(255,255,0)},{Color=Color3.fromRGB(255,165,0)},
+        {Color=Color3.fromRGB(255,80,80)},{Color=Color3.fromRGB(255,255,255)},
+        {Color=Color3.fromRGB(0,200,255)},{Color=Color3.fromRGB(180,0,255)},
     }
     custApi.AddSwatchRow(healthColors,
         function(i) S.EspHealthColor=healthColors[i].Color end,
-        function()
-            for i, hc in ipairs(healthColors) do if hc.Color==S.EspHealthColor then return i end end
-            return 1
-        end
+        function() for i, hc in ipairs(healthColors) do if hc.Color==S.EspHealthColor then return i end end return 1 end
     )
     custApi.AddSection("ESP SETTINGS")
     custApi.AddSlider("Max Dist",100,10000,
@@ -2204,120 +2512,6 @@ if custApi then
     )
 end
 
--- ════════════════════════════════════════════════
---    🔥 ОБЁРТКИ ДЛЯ TOGGLE/SLIDER/DROPDOWN/COLOR
--- ════════════════════════════════════════════════
-local function ForceToggleVisual(toggleObj, name, state, theme)
-    if not toggleObj or not toggleObj.Instance then return end
-    local btn = toggleObj.Instance
-    if not btn or not btn.Parent then return end
-    local bg = state and theme.ButtonOn or theme.ButtonOff
-    btn.BackgroundColor3 = bg
-    local lum = bg.R*0.299 + bg.G*0.587 + bg.B*0.114
-    btn.TextColor3 = lum > 0.62 and Color3.fromRGB(20,20,24) or Color3.fromRGB(245,245,245)
-    btn.Text = name..": "..(state and "ON" or "OFF")
-end
-
-local function CreateFixedToggle(tab, name, settingKey, callback)
-    local currentState = S[settingKey] or false
-    
-    local toggle = tab:CreateToggle({
-        Name = name,
-        Default = currentState,
-        Callback = function(v)
-            -- 🔥 Callback вызывается ПОСЛЕ изменения state в DivaUI
-            currentState = v
-            S[settingKey] = v
-            if callback then callback(v) end
-            -- Принудительно перерисовываем визуал
-            ForceToggleVisual(toggle, name, v, Window.CurTheme())
-        end
-    })
-    
-    -- Применяем визуал сразу
-    task.defer(function()
-        task.wait(0.05)
-        ForceToggleVisual(toggle, name, currentState, Window.CurTheme())
-    end)
-    
-    -- 🔥 ОБЕРТКА для :Set() с защитой от двойного вызова
-    local origSet = toggle.Set
-    toggle.Set = function(self, value, silent)
-        local newState = value and true or false
-        currentState = newState
-        S[settingKey] = newState
-        -- Вызываем оригинальный Set с silent=true чтобы НЕ дёргать callback
-        if origSet then 
-            pcall(function() origSet(self, newState, true) end)
-        end
-        -- Принудительно обновляем визуал
-        ForceToggleVisual(self, name, newState, Window.CurTheme())
-        -- Вызываем наш callback вручную если silent=false
-        if not silent and callback then
-            task.spawn(function() pcall(callback, newState) end)
-        end
-    end
-    
-    -- 🔥 БЕЗ дополнительного MouseButton1Click — DivaUI сам обработает клик
-    
-    RegToggle(settingKey, toggle)
-    return toggle
-end
-
-local function CreateFixedSlider(tab, name, settingKey, mn, mx, fmt, callback)
-    local currentValue = S[settingKey] or mn
-    
-    local slider = tab:CreateSlider({
-        Name = name,
-        Min = mn,
-        Max = mx,
-        Default = currentValue,
-        Format = fmt,
-        Callback = function(v)
-            currentValue = v
-            S[settingKey] = v
-            if callback then callback(v) end
-        end
-    })
-    
-    RegSlider(settingKey, slider)
-    return slider
-end
-
-local function CreateFixedDropdown(tab, name, settingKey, options, callback)
-    local currentValue = S[settingKey] or options[1]
-    
-    local dropdown = tab:CreateDropdown({
-        Name = name,
-        Options = options,
-        Default = currentValue,
-        Callback = function(v)
-            S[settingKey] = v
-            if callback then callback(v) end
-        end
-    })
-    
-    RegDropdown(settingKey, dropdown)
-    return dropdown
-end
-
-local function CreateFixedColorPicker(tab, name, settingKey, callback)
-    local currentValue = S[settingKey]
-    
-    local picker = tab:CreateColorPicker({
-        Name = name,
-        Default = currentValue,
-        Callback = function(c)
-            S[settingKey] = c
-            if callback then callback(c) end
-        end
-    })
-    
-    RegColor(settingKey, picker)
-    return picker
-end
-
--- ═══ AIMING TAB ═══
 local AimTab = Window:CreateTab("Aiming")
 CreateFixedToggle(AimTab, "Aim Player", "Enabled", function(v) SetAimbot(v) end)
 CreateFixedToggle(AimTab, "Aim NPC", "TargetNPCs", function(v) SetTargetNPCs(v) end)
@@ -2327,7 +2521,6 @@ CreateFixedSlider(AimTab, "Smoothness", "Sensitivity", 0.01, 1, "%.2f")
 CreateFixedSlider(AimTab, "Aim FOV", "FOV", 10, 500, "%d", function(v) FOVCircle.Radius=v end)
 CreateFixedSlider(AimTab, "Offset X", "OffsetX", -5, 5, "%.1f")
 CreateFixedSlider(AimTab, "Offset Y", "OffsetY", -5, 5, "%.1f")
-
 AimTab:CreateDivider()
 AimTab:CreateSection("Triggerbot")
 AimTab:CreateLabel({Text="Fires automatically when aimed", Wrapped=true})
@@ -2335,7 +2528,6 @@ CreateFixedToggle(AimTab, "Triggerbot", "TriggerbotEnabled", function(v) SetTrig
 CreateFixedDropdown(AimTab, "Trigger Key", "TriggerbotKey", TriggerbotKeys)
 CreateFixedSlider(AimTab, "Trigger Delay (s)", "TriggerbotDelay", 0.05, 1, "%.2f")
 
--- ═══ PLAYER ESP TAB ═══
 local PlayerESPTab = Window:CreateTab("Player ESP")
 CreateFixedToggle(PlayerESPTab, "ESP Player", "EspEnabled", function(v) SetEsp(v) end)
 CreateFixedDropdown(PlayerESPTab, "Highlight", "HighlightMode", {"OFF","HIGHLIGHT","WO_CHAMS","CHAMS"}, function(v)
@@ -2344,9 +2536,7 @@ CreateFixedDropdown(PlayerESPTab, "Highlight", "HighlightMode", {"OFF","HIGHLIGH
     end
 end)
 CreateFixedColorPicker(PlayerESPTab, "Highlight Color", "HighlightColor", function(c)
-    for chr, data in pairs(ESP.Tracked) do
-        ESP:UpdateHL(chr,data,chr==R.LockedTarget)
-    end
+    for chr, data in pairs(ESP.Tracked) do ESP:UpdateHL(chr,data,chr==R.LockedTarget) end
 end)
 CreateFixedDropdown(PlayerESPTab, "Names", "NameDisplayMode", {"DisplayName","Username","Both"})
 CreateFixedToggle(PlayerESPTab, "Tool Notify", "ToolNotifyEnabled", function(v) SetToolNotify(v) end)
@@ -2366,12 +2556,10 @@ CreateFixedToggle(PlayerESPTab, "Trigger Words", "TriggerWordsEnabled")
 CreateFixedToggle(PlayerESPTab, "Fuzzy Match", "TriggerFuzzy")
 CreateFixedDropdown(PlayerESPTab, "Alert Mode", "TriggerDisplayMode", {"Hint","Message","Notification"})
 PlayerESPTab:CreateTextBox({
-    Name="Add Trigger Word",
-    Placeholder="Type and press Enter...",
+    Name="Add Trigger Word", Placeholder="Type and press Enter...",
     Callback=function(text, enter)
         if enter and text and text ~= "" then
-            table.insert(S.TriggerWords, text)
-            Notify("Trigger","Added: "..text,2)
+            table.insert(S.TriggerWords, text) Notify("Trigger","Added: "..text,2)
         end
     end
 })
@@ -2379,7 +2567,6 @@ PlayerESPTab:CreateButton({Name="Clear Trigger Words", Callback=function()
     S.TriggerWords={} Notify("Trigger","All cleared",2)
 end})
 
--- ═══ NPC ESP TAB ═══
 local NPCESPTab = Window:CreateTab("NPC ESP")
 CreateFixedToggle(NPCESPTab, "ESP NPC", "EspNPCEnabled", function(v) SetEspNPC(v) end)
 CreateFixedDropdown(NPCESPTab, "NPC Highlight", "NPCHighlightMode", {"OFF","HIGHLIGHT","WO_CHAMS","CHAMS"}, function(v)
@@ -2389,8 +2576,7 @@ CreateFixedDropdown(NPCESPTab, "NPC Highlight", "NPCHighlightMode", {"OFF","HIGH
     end
 end)
 NPCESPTab:CreateColorPicker({
-    Name="NPC Color",
-    Default=S.HighlightColor,
+    Name="NPC Color", Default=S.HighlightColor,
     Callback=function(c)
         S.HighlightColor=c
         for chr, data in pairs(ESP.Tracked) do
@@ -2399,7 +2585,6 @@ NPCESPTab:CreateColorPicker({
     end
 })
 
--- ═══ HITBOX TAB ═══
 local HitboxTab = Window:CreateTab("Hitbox Map")
 CreateFixedToggle(HitboxTab, "Hitbox Map", "HitboxEnabled", function(v) Hitbox:UpdateVisual() end)
 HitboxTab:CreateButton({Name="Select Map Model", Callback=function() Hitbox:StartSelection() end})
@@ -2410,127 +2595,187 @@ HitboxTab:CreateButton({Name="Clear Selection", Callback=function()
     S.HitboxModel=nil Hitbox:ClearVisual() Notify("Hitbox","Selection cleared",2)
 end})
 
--- ═══ WORLD TAB ═══
 local WorldTab = Window:CreateTab("World")
 CreateFixedToggle(WorldTab, "XRay Vision", "XrayEnabled", function(v) SetXray(v) end)
 CreateFixedToggle(WorldTab, "Xray Players", "XrayPlayers", function(v) SetXrayPlayers(v) end)
 CreateFixedToggle(WorldTab, "Full Bright", "FullBrightEnabled", function(v) SetFullBright(v) end)
 WorldTab:CreateDropdown({
-    Name="Remove Textures",
-    Options={"OFF","TEXTURES","MATERIALS","BOTH"},
-    Default="OFF",
+    Name="Remove Textures", Options={"OFF","TEXTURES","MATERIALS","BOTH"}, Default="OFF",
     Callback=function(v)
         for i, m in ipairs(NoTex.Modes) do
             if m==v then NoTex:SetMode(i) break end
         end
     end
 })
-
 WorldTab:CreateDivider()
 WorldTab:CreateSection("Force Speed")
-WorldTab:CreateLabel({Text="! Bypasses WalkSpeed ​​blocking", Wrapped=true})
+WorldTab:CreateLabel({Text="! Bypasses WalkSpeed blocking. Works with fly, experimentally!", Wrapped=true})
 CreateFixedSlider(WorldTab, "Force Speed Value", "ForceSpeedValue", 5, 200, "%d")
 CreateFixedDropdown(WorldTab, "Force Method", "ForceSpeedMethodName", ForceSpeedMethodNames, function(v)
     for i, n in ipairs(ForceSpeedMethodNames) do
-        if n==v then S.ForceSpeedMethod=i break end
+        if n == v then S.ForceSpeedMethod = i break end
     end
-    if S.ForceSpeedEnabled then SetForceSpeed(false) SetForceSpeed(true) end
+    if S.ForceSpeedEnabled then
+        SetForceSpeed(false)
+        SetForceSpeed(true)
+    end
+    if S.FlyEnabled then
+        _RawSetFly(true)
+    end
 end)
 CreateFixedToggle(WorldTab, "Force Speed", "ForceSpeedEnabled", function(v) SetForceSpeed(v) end)
-
 WorldTab:CreateDivider()
 WorldTab:CreateSection("Shift Lock Unlocker")
-WorldTab:CreateLabel({
-    Text = "Press the button to unlock Shift Lock in-game",
-    Wrapped = true
-})
-
 WorldTab:CreateActionButton({
-    Name = "Unlock Shift Lock",
-    Cooldown = 1.5,
-    NotifyTitle = "Shift Lock",
-    Callback = function()
+    Name="Unlock Shift Lock", Cooldown=1.5,
+    NotifyTitle="Shift Lock",
+    Callback=function()
         local wasLocked = (LocalPlayer.DevEnableMouseLock == false)
-        
-        local ok = pcall(function() 
-            LocalPlayer.DevEnableMouseLock = true 
-        end)
-        
-        if not ok then
-            Notify("Shift Lock", "! Failed to unlock (server-protected)", 4)
-            return false
-        end
-        
-        if wasLocked then
-            Notify("Shift Lock", "! Unlocked! Shift key now works", 4)
-        else
-            Notify("Shift Lock", "! Already unlocked", 3)
-        end
-        
-        -- Activate Shift Lock listener if not active yet
+        local ok = pcall(function() LocalPlayer.DevEnableMouseLock = true end)
+        if not ok then Notify("Shift Lock","! Failed to unlock",4) return false end
+        if wasLocked then Notify("Shift Lock","! Unlocked! Shift key now works",4)
+        else Notify("Shift Lock","! Already unlocked",3) end
         if not R.ShiftPCConn and not isMobile then
             R.ShiftPCConn = Services.UserInputService.InputBegan:Connect(function(input, gp)
                 if gp then return end
-                if input.KeyCode == Enum.KeyCode.LeftShift or input.KeyCode == Enum.KeyCode.RightShift then
+                if input.KeyCode==Enum.KeyCode.LeftShift or input.KeyCode==Enum.KeyCode.RightShift then
                     ToggleShiftLockState()
                 end
             end)
         end
-        
-        -- Mobile Shift Lock button
         if isMobile and not R.MobileShiftBtn then
             CreateMobileShiftButton()
             pcall(function()
                 Services.ContextActionService:BindAction("DivaShiftLock", function(_, state)
-                    if state == Enum.UserInputState.Begin then 
-                        ToggleShiftLockState() 
-                    end
+                    if state==Enum.UserInputState.Begin then ToggleShiftLockState() end
                 end, false, "On")
-                R.MobileShiftCASBound = true
+                R.MobileShiftCASBound=true
             end)
         end
-        
         return true
     end
 })
-
 WorldTab:CreateDivider()
 WorldTab:CreateSection("Camera Zoom")
-WorldTab:CreateLabel({Text="Min/Max camera zoom distance", Wrapped=true})
 CreateFixedSlider(WorldTab, "Zoom Min", "ZoomMin", 0, 50, "%.1f", function(v) ApplyZoomLimits() end)
 CreateFixedSlider(WorldTab, "Zoom Max", "ZoomMax", 10, 1000, "%d", function(v) ApplyZoomLimits() end)
 WorldTab:CreateButton({Name="Apply Zoom", Callback=function()
-    ApplyZoomLimits() Notify("Zoom","Applied: "..S.ZoomMin.." — "..S.ZoomMax, 2)
+    ApplyZoomLimits() Notify("Zoom","Applied: "..S.ZoomMin.." "..S.ZoomMax,2)
 end})
 
--- ═══ FLY TAB ═══
 local FlyTab = Window:CreateTab("Flying")
+FlyTab:CreateLabel({Text="Fly and Car Fly are blocked when Water Block is active", Wrapped=true})
 CreateFixedToggle(FlyTab, "Fly (F)", "FlyEnabled", function(v) SetFly(v) end)
 CreateFixedSlider(FlyTab, "Fly Speed", "FlySpeed", 1, 100, "%.1f")
 CreateFixedToggle(FlyTab, "Car Fly", "CarFlyEnabled", function(v) SetCarFly(v) end)
 CreateFixedSlider(FlyTab, "Car Fly Speed", "CarFlySpeed", 10, 500, "%d")
 
--- ═══ CHARACTER TAB ═══
+local WaterTab = Window:CreateTab("Water")
+WaterTab:CreateSection("Water Block System")
+WaterTab:CreateLabel({
+    Text = "Walk on water surface or move freely underwater. Fly is auto-blocked.",
+    Wrapped = true
+})
+
+local WalkOnWaterToggle = CreateFixedToggle(WaterTab, "Walk On Water", "WalkOnWater", function(v)
+    WaterBlock.WalkOnWater = v
+    if v then
+        WaterBlock.SwimUnder = false
+        S.SwimUnder = false
+        if UIRefs.Toggles["SwimUnder"] then
+            pcall(function() UIRefs.Toggles["SwimUnder"]:Set(false, true) end)
+        end
+        SetWaterBlock(true)
+    else
+        if not WaterBlock.SwimUnder then
+            SetWaterBlock(false)
+        end
+    end
+end)
+
+local SwimUnderToggle = CreateFixedToggle(WaterTab, "Walk Underwater", "SwimUnder", function(v)
+    WaterBlock.SwimUnder = v
+    if v then
+        WaterBlock.WalkOnWater = false
+        S.WalkOnWater = false
+        WB_DestroyPlatform()
+        if UIRefs.Toggles["WalkOnWater"] then
+            pcall(function() UIRefs.Toggles["WalkOnWater"]:Set(false, true) end)
+        end
+        SetWaterBlock(true)
+    else
+        if not WaterBlock.WalkOnWater then
+            SetWaterBlock(false)
+        end
+    end
+end)
+
+WaterTab:CreateDivider()
+WaterTab:CreateButton({
+    Name = "Diagnose Water",
+    Callback = function()
+        local partCount = WB_FindWaterParts()
+        local c = LocalPlayer.Character
+        local hrp = c and c:FindFirstChild("HumanoidRootPart")
+        local hum = c and c:FindFirstChildOfClass("Humanoid")
+        if not hrp then Notify("Water", "No character!", 3) return end
+        local rayHit, raySurfY = WB_RaycastWater(hrp.Position)
+        local voxelHit = WB_CheckTerrainBox(hrp.Position)
+        local swimming = WB_CheckSwimState(hum)
+        local state = hum and tostring(hum:GetState()) or "no hum"
+        local msg = string.format(
+            "Parts: %d | Ray: %s | Vox: %s | Swim: %s | Y: %s\nState: %s",
+            partCount, tostring(rayHit), tostring(voxelHit), tostring(swimming),
+            raySurfY and tostring(math.floor(raySurfY)) or "nil", state
+        )
+        Notify("Water Debug", msg, 8)
+    end
+})
+WaterTab:CreateButton({
+    Name = "Toggle Debug Platform",
+    Callback = function()
+        WaterBlock.DebugMode = not WaterBlock.DebugMode
+        if WaterBlock.Platform and WaterBlock.Platform.Parent then
+            WaterBlock.Platform.Transparency = WaterBlock.DebugMode and 0.3 or 1
+        end
+        Notify("Water", "Debug visible: " .. tostring(WaterBlock.DebugMode), 2)
+    end
+})
+WaterTab:CreateButton({
+    Name = "Rescan Water Parts",
+    Callback = function()
+        local count = WB_FindWaterParts()
+        Notify("Water", "Found " .. count .. " BasePart water(s)", 3)
+    end
+})
+WaterTab:CreateButton({
+    Name = "Reset Water System",
+    Callback = function()
+        SetWaterBlock(false)
+        WaterBlock.WalkOnWater = false WaterBlock.SwimUnder = false
+        S.WalkOnWater = false S.SwimUnder = false
+        WB_DestroyPlatform()
+        local c = LocalPlayer.Character
+        if c then local hum = c:FindFirstChildOfClass("Humanoid") if hum then WB_BlockSwim(hum, false) end end
+        if UIRefs.Toggles["WalkOnWater"] then pcall(function() UIRefs.Toggles["WalkOnWater"]:Set(false, true) end) end
+        if UIRefs.Toggles["SwimUnder"] then pcall(function() UIRefs.Toggles["SwimUnder"]:Set(false, true) end) end
+        Notify("Water", "Water system reset", 2)
+    end
+})
+
 local CharTab = Window:CreateTab("Character")
 CharTab:CreateSection("ANTI-THING")
 local AntiManager = CharTab:CreateAntiThingManager({
-    Items = AntiStateList,
-    States = AS,
+    Items = AntiStateList, States = AS,
     OnAdd = function(key)
         for _, entry in ipairs(AntiStateList) do
-            if entry.Key==key then
-                table.insert(AntiThingAdded, entry)
-                break
-            end
+            if entry.Key==key then table.insert(AntiThingAdded, entry) break end
         end
         ApplyAntiStates()
     end,
     OnRemove = function(key)
         for i = #AntiThingAdded, 1, -1 do
-            if AntiThingAdded[i].Key==key then
-                table.remove(AntiThingAdded, i)
-                break
-            end
+            if AntiThingAdded[i].Key==key then table.remove(AntiThingAdded, i) break end
         end
         ApplyAntiStates()
     end,
@@ -2538,18 +2783,11 @@ local AntiManager = CharTab:CreateAntiThingManager({
 })
 UIRefs.AntiManager = AntiManager
 
-
-
 CharTab:CreateDivider()
 CharTab:CreateSection("MOVEMENT")
 CreateFixedToggle(CharTab, "NoClip (N)", "NoClipEnabled", function(v) SetNoClip(v) end)
 CreateFixedToggle(CharTab, "Anti Slip", "AntiSlipEnabled", function(v) SetAntiSlip(v) end)
-CreateFixedDropdown(
-    CharTab,
-    "Anti Slip Mode",
-    "AntiSlipMode",
-    AntiSlipModes
-)
+CreateFixedDropdown(CharTab, "Anti Slip Mode", "AntiSlipMode", AntiSlipModes)
 CreateFixedSlider(CharTab, "Walk Speed", "WalkSpeed", 5, 500, "%.1f", function(v)
     if humanoid and humanoid.Parent then humanoid.WalkSpeed=v end
 end)
@@ -2559,11 +2797,6 @@ end)
 CreateFixedSlider(CharTab, "Camera FOV", "CameraFOV", 1, 120, "%d", function(v) Camera.FieldOfView=v end)
 
 CharTab:CreateDivider()
-CharTab:CreateSection("FORCE APPLY")
-CharTab:CreateLabel({Text="! Constantly applies Speed/Jump/FOV", Wrapped=true})
-CreateFixedToggle(CharTab, "Force Apply Stats", "ForceApplyEnabled", function(v) SetForceApply(v) end)
-
-CharTab:CreateDivider()
 CharTab:CreateSection("SCAFFOLD")
 CharTab:CreateLabel({Text="Platform underfoot", Wrapped=true})
 CreateFixedToggle(CharTab, "Scaffold", "ScaffoldEnabled", function(v) SetScaffold(v) end)
@@ -2571,7 +2804,63 @@ CreateFixedSlider(CharTab, "Size X", "ScaffoldX", 1, 10, "%.1f")
 CreateFixedSlider(CharTab, "Size Y", "ScaffoldY", 0.5, 10, "%.1f")
 CreateFixedSlider(CharTab, "Size Z", "ScaffoldZ", 1, 10, "%.1f")
 
--- ═══ FLING TAB ═══
+CharTab:CreateDivider()
+CharTab:CreateSection("GAME SYNC & FORCE APPLY")
+CharTab:CreateLabel({Text="LSWG: слайдеры обновляются когда игра меняет значения\nForce Apply: постоянно применяет твои значения\nОни несовместимы между собой!", Wrapped=true})
+
+-- ИСПРАВЛЕНО: syncToggle и forceToggle без дублирования,
+-- с правильной взаимоблокировкой через SetForceApply
+local syncToggle, forceToggle
+
+syncToggle = CreateFixedToggle(CharTab, "Live Sync With Game (LSWG)", "GameSyncEnabled", function(v)
+    if v and S.ForceApplyEnabled then
+        -- Откатываем обратно
+        S.GameSyncEnabled = false
+        pcall(function() syncToggle:Set(false, true) end)
+        Notify("Conflict", "Нельзя включить Live Sync пока Force Apply ON!", 3)
+        return
+    end
+    if v then
+        Notify("Game Sync", "Теперь следит за изменениями скорости/прыжка в игре", 2)
+    end
+end)
+
+forceToggle = CreateFixedToggle(CharTab, "Force Apply Stats", "ForceApplyEnabled", function(v)
+    if v and S.GameSyncEnabled then
+        -- Откатываем обратно
+        S.ForceApplyEnabled = false
+        pcall(function() forceToggle:Set(false, true) end)
+        Notify("Conflict", "Нельзя включить Force Apply пока Live Sync ON!", 3)
+        return
+    end
+    -- Вызываем SetForceApply который реально подключает/отключает хартбит
+    SetForceApply(v)
+    if v then
+        Notify("Force Apply", "Стат заблокирован на твоих значениях", 2)
+    end
+end)
+
+CharTab:CreateButton({
+    Name = "Reset Values From Game",
+    Callback = function()
+        if S.ForceApplyEnabled then
+            Notify("Blocked", "Выключи Force Apply чтобы сбросить!", 3)
+            return
+        end
+        local c = LocalPlayer.Character
+        local hum = c and c:FindFirstChildOfClass("Humanoid")
+        if hum then
+            S.WalkSpeed = hum.WalkSpeed
+            S.JumpPower = hum.JumpPower
+            S.CameraFOV = workspace.CurrentCamera.FieldOfView
+            if UIRefs.Sliders["WalkSpeed"] then UIRefs.Sliders["WalkSpeed"]:Set(S.WalkSpeed, true) end
+            if UIRefs.Sliders["JumpPower"] then UIRefs.Sliders["JumpPower"]:Set(S.JumpPower, true) end
+            if UIRefs.Sliders["CameraFOV"] then UIRefs.Sliders["CameraFOV"]:Set(S.CameraFOV, true) end
+            Notify("Reset", "Синхронизировано с игрой", 2)
+        end
+    end
+})
+
 local FlingTab = Window:CreateTab("Fling")
 local FlingStatusLbl = FlingTab:CreateLabel({Text="0 target(s) selected"})
 local FlingList
@@ -2587,19 +2876,12 @@ end})
 FlingTab:CreateButton({Name="STOP", Callback=function() Fling:Stop() UpdateFlingStatus() end})
 CreateFixedToggle(FlingTab, "Invis", "FlingInvis", function(v) R.FlingInvis=v end)
 FlingTab:CreateDivider()
-FlingTab:CreateButton({Name="Select All", Callback=function()
-    if FlingList then FlingList:SelectAll() end
-end})
-FlingTab:CreateButton({Name="Deselect All", Callback=function()
-    if FlingList then FlingList:DeselectAll() end
-end})
+FlingTab:CreateButton({Name="Select All", Callback=function() if FlingList then FlingList:SelectAll() end end})
+FlingTab:CreateButton({Name="Deselect All", Callback=function() if FlingList then FlingList:DeselectAll() end end})
 FlingList = FlingTab:CreatePlayerList({
-    OnChange = function(selected)
-        R.FlingTargets=selected UpdateFlingStatus()
-    end
+    OnChange=function(selected) R.FlingTargets=selected UpdateFlingStatus() end
 })
 
--- ═══ SAVE TAB ═══
 local SaveTab = Window:CreateTab("Save")
 local SlotLbl = SaveTab:CreateLabel({Text="Slot 1 [Empty]", Primary=true})
 local function UpdateSlotLabel()
@@ -2615,19 +2897,14 @@ SaveTab:CreateButton({Name="> Next Slot", Callback=function()
 end})
 SaveTab:CreateDivider()
 SaveTab:CreateButton({Name="Save Current Slot", Callback=function() SaveLoad:Save() UpdateSlotLabel() end})
-SaveTab:CreateButton({Name="Load Current Slot", Callback=function()
-    SaveLoad:Load()
-    UpdateSlotLabel()
-end})
+SaveTab:CreateButton({Name="Load Current Slot", Callback=function() SaveLoad:Load() UpdateSlotLabel() end})
 SaveTab:CreateButton({Name="Delete Current Slot", Callback=function() SaveLoad:Delete() UpdateSlotLabel() end})
 SaveTab:CreateDivider()
 CreateFixedToggle(SaveTab, "Auto Save", "AutoSaveEnabled", function(v)
     R.SaveEnabled=v if v then SaveLoad:StartAutoLoop() end
 end)
 SaveTab:CreateDropdown({
-    Name="Auto Save Interval",
-    Options={"1 min","5 min","1 hour"},
-    Default="1 min",
+    Name="Auto Save Interval", Options={"1 min","5 min","1 hour"}, Default="1 min",
     Callback=function(v)
         for i, item in ipairs(SaveIntervals) do
             if item.Name==v then R.SaveIntIdx=i R.SaveInterval=item.Time break end
@@ -2636,9 +2913,6 @@ SaveTab:CreateDropdown({
 })
 UpdateSlotLabel()
 
--- ════════════════════════════════════════════════
---          MOBILE AIM BUTTON
--- ════════════════════════════════════════════════
 if isMobile then
     task.wait(0.3)
     local aimGui = Instance.new("ScreenGui")
@@ -2653,7 +2927,7 @@ if isMobile then
     aimBtn.Position=UDim2.new(1,-85,0.65,-32)
     aimBtn.BackgroundColor3=Color3.fromRGB(40,40,50)
     aimBtn.BackgroundTransparency=0.25
-    aimBtn.Text="🎯" aimBtn.TextColor3=Color3.new(1,1,1)
+    aimBtn.Text="" aimBtn.TextColor3=Color3.new(1,1,1)
     aimBtn.TextSize=32 aimBtn.Font=Enum.Font.GothamBold
     aimBtn.BorderSizePixel=0 aimBtn.AutoButtonColor=false
     aimBtn.Parent=aimGui
@@ -2668,13 +2942,11 @@ if isMobile then
         if state then
             aimBtn.BackgroundColor3=Color3.fromRGB(180,60,60)
             aimBtn.BackgroundTransparency=0.1
-            aimStroke.Color=Color3.fromRGB(255,80,80)
-            aimStroke.Transparency=0
+            aimStroke.Color=Color3.fromRGB(255,80,80) aimStroke.Transparency=0
         else
             aimBtn.BackgroundColor3=Color3.fromRGB(40,40,50)
             aimBtn.BackgroundTransparency=0.25
-            aimStroke.Color=Color3.fromRGB(255,255,255)
-            aimStroke.Transparency=0.4
+            aimStroke.Color=Color3.fromRGB(255,255,255) aimStroke.Transparency=0.4
             SetLocked(nil)
         end
     end
@@ -2715,15 +2987,10 @@ if isMobile then
     AddInputListener("TouchEnded", aimTouchEndListener)
 
     R.MobileAimListeners = {
-        Changed = aimChangeListener,
-        Ended = aimEndListener,
-        TouchEnded = aimTouchEndListener,
+        Changed=aimChangeListener, Ended=aimEndListener, TouchEnded=aimTouchEndListener,
     }
 end
 
--- ════════════════════════════════════════════════
---          INIT + RENDERSTEP
--- ════════════════════════════════════════════════
 Main:Init()
 local renderName = GenStr(12)
 R.RenderName = renderName
@@ -2739,5 +3006,3 @@ Services.RunService:BindToRenderStep(renderName, Enum.RenderPriority.Camera.Valu
     Main:Update(dt)
     Main:AimUpdate()
 end)
-
-Notify("DIVA","Loaded! 🚀 v3 (UI sync fixed)",4)

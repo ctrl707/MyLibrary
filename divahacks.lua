@@ -81,8 +81,6 @@ local S = {
     HighlightColor=Color3.fromRGB(255,255,255),
     UseTeamColor=false, TeamCheckHL=false,
     NPCHighlightMode="OFF", FullBrightEnabled=false,
-    HitboxEnabled=false, HitboxSize=15, HitboxVisible=false,
-    HitboxAutoDetect=false, HitboxModel=nil,
     TriggerWordsEnabled=false, TriggerWords={},
     TriggerFuzzy=false, TriggerDisplayMode="Hint",
     ShowRobloxNames=false,
@@ -96,7 +94,7 @@ local S = {
     AutoSaveEnabled=false,
     FlingInvis=false, AntiSlipEnabled=false, AntiSlipMode="StopOnly",
     WaterBlockEnabled=false, WalkOnWater=false, SwimUnder=false,
-    GameSyncEnabled=false, ForceApplyEnabled=false,
+    ForceApplyEnabled=false,
 }
 
 local AntiSlipModes = {"StopOnly","Full"}
@@ -609,68 +607,6 @@ local function SetDefaultNamesVisible(visible)
     end
 end
 
-local Hitbox = {Highlight=nil, SelectionConn=nil}
-function Hitbox:ClearVisual() if self.Highlight then self.Highlight:Destroy() self.Highlight=nil end end
-function Hitbox:UpdateVisual()
-    self:ClearVisual()
-    if not S.HitboxEnabled or not S.HitboxVisible or not S.HitboxModel then return end
-    local m = S.HitboxModel
-    local pp = m:IsA("Model") and (m.PrimaryPart or m:FindFirstChildWhichIsA("BasePart")) or (m:IsA("BasePart") and m)
-    if not pp then return end
-    local hl = Instance.new("Highlight")
-    hl.Name=GenStr() hl.Adornee=m
-    hl.FillColor=Color3.fromRGB(255,255,0) hl.FillTransparency=0.7
-    hl.OutlineColor=Color3.fromRGB(255,255,0)
-    hl.DepthMode=Enum.HighlightDepthMode.AlwaysOnTop
-    hl.Enabled=true hl.Parent=GlobalHLFolder
-    self.Highlight = hl
-end
-function Hitbox:GetCenter()
-    if not S.HitboxModel then return nil end
-    local m = S.HitboxModel
-    if m:IsA("Model") then
-        local pp = m.PrimaryPart or m:FindFirstChildWhichIsA("BasePart")
-        return pp and pp.Position
-    elseif m:IsA("BasePart") then return m.Position end
-end
-function Hitbox:IsInside(pos)
-    if not S.HitboxEnabled or not S.HitboxModel then return false end
-    local c = self:GetCenter()
-    return c and (pos-c).Magnitude <= S.HitboxSize
-end
-function Hitbox:StartSelection()
-    if self.SelectionConn then self.SelectionConn:Disconnect() end
-    Notify("Hitbox","Click on a model/part to select",5)
-    self.SelectionConn = Services.UserInputService.InputBegan:Connect(function(input, gp)
-        if gp then return end
-        if input.UserInputType ~= Enum.UserInputType.MouseButton1
-            and input.UserInputType ~= Enum.UserInputType.Touch then return end
-        local target = LocalPlayer:GetMouse().Target
-        if not target then return end
-        local model = target:FindFirstAncestorWhichIsA("Model")
-        S.HitboxModel = (model and model ~= LocalPlayer.Character) and model or target
-        Notify("Hitbox","Selected: "..S.HitboxModel.Name,3)
-        self:UpdateVisual()
-        self.SelectionConn:Disconnect() self.SelectionConn=nil
-    end)
-end
-function Hitbox:AutoDetect()
-    local best, bestSize = nil, 0
-    for _, obj in ipairs(workspace:GetChildren()) do
-        if obj:IsA("Model") and not Services.Players:GetPlayerFromCharacter(obj) and obj ~= LocalPlayer.Character then
-            local pp = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
-            if pp and pp.Size.Magnitude > bestSize then bestSize=pp.Size.Magnitude best=obj end
-        end
-    end
-    if best then
-        S.HitboxModel=best Notify("Hitbox","[Auto] "..best.Name,3) self:UpdateVisual()
-    else Notify("Hitbox","[Auto] Not found",3) end
-end
-function Hitbox:Destroy()
-    self:ClearVisual()
-    if self.SelectionConn then self.SelectionConn:Disconnect() self.SelectionConn=nil end
-end
-
 local Trigger = {}
 function Trigger:Check(toolName)
     if not S.TriggerWordsEnabled or #S.TriggerWords == 0 then return false end
@@ -748,102 +684,392 @@ function Xray:Remove()
     self.OrigB=setmetatable({},{__mode="k"})
 end
 
-local FullBright = {Conns={}, Orig={}}
+local FullBright = { Conns = {}, GameLighting = {}, EffectData = setmetatable({}, {__mode = "k"}) }
+
+function FullBright:CaptureGameState()
+    local L = Services.Lighting
+
+    self.GameLighting.Ambient = L.Ambient
+    self.GameLighting.Brightness = L.Brightness
+    self.GameLighting.ClockTime = L.ClockTime
+    self.GameLighting.FogEnd = L.FogEnd
+    self.GameLighting.GlobalShadows = L.GlobalShadows
+
+    self.EffectData = setmetatable({}, {__mode = "k"})
+
+    for _, fx in ipairs(L:GetChildren()) do
+        if fx:IsA("Atmosphere") then
+            self.EffectData[fx] = {
+                Density = fx.Density,
+                Offset = fx.Offset,
+                Color = fx.Color,
+                Decay = fx.Decay,
+                Glare = fx.Glare,
+                Haze = fx.Haze,
+            }
+        elseif fx:IsA("ColorCorrectionEffect") then
+            self.EffectData[fx] = {
+                Enabled = fx.Enabled,
+                Brightness = fx.Brightness,
+                Contrast = fx.Contrast,
+                Saturation = fx.Saturation,
+                TintColor = fx.TintColor,
+            }
+        elseif fx:IsA("BloomEffect") then
+            self.EffectData[fx] = {
+                Enabled = fx.Enabled,
+                Intensity = fx.Intensity,
+                Size = fx.Size,
+                Threshold = fx.Threshold,
+            }
+        end
+    end
+end
+
+function FullBright:ApplyFullBright()
+    local L = Services.Lighting
+
+    L.Ambient = Color3.fromRGB(255,255,255)
+    L.Brightness = 2
+    L.ClockTime = 14
+    L.FogEnd = 100000
+    L.GlobalShadows = false
+
+    for _, fx in ipairs(L:GetChildren()) do
+        if fx:IsA("Atmosphere") then
+            fx.Density = 0
+        elseif fx:IsA("ColorCorrectionEffect") then
+            fx.Brightness = 0
+            fx.Contrast = 0
+        elseif fx:IsA("BloomEffect") then
+            fx.Enabled = false
+        end
+    end
+end
+
 function FullBright:Apply()
     local L = Services.Lighting
-    if not self.Orig.Ambient then
-        self.Orig.Ambient=L.Ambient self.Orig.Brightness=L.Brightness
-        self.Orig.ClockTime=L.ClockTime self.Orig.FogEnd=L.FogEnd
-        self.Orig.GlobalShadows=L.GlobalShadows
-    end
-    L.Ambient=Color3.fromRGB(255,255,255) L.Brightness=2
-    L.ClockTime=14 L.FogEnd=100000 L.GlobalShadows=false
-    for _, fx in ipairs(L:GetChildren()) do
-        if fx:IsA("Atmosphere") then fx.Density=0
-        elseif fx:IsA("ColorCorrectionEffect") then fx.Brightness=0 fx.Contrast=0
-        elseif fx:IsA("BloomEffect") then fx.Enabled=false end
-    end
+
     self:Cleanup()
-    self.Conns.ambient = L:GetPropertyChangedSignal("Ambient"):Connect(function()
-        if S.FullBrightEnabled then L.Ambient=Color3.fromRGB(255,255,255) end
-    end)
-    self.Conns.bright = L:GetPropertyChangedSignal("Brightness"):Connect(function()
-        if S.FullBrightEnabled then L.Brightness=2 end
-    end)
-end
-function FullBright:Cleanup()
-    for k, c in pairs(self.Conns) do
-        if c then pcall(function() c:Disconnect() end) end
-        self.Conns[k] = nil
+
+    self:CaptureGameState()
+    self:ApplyFullBright()
+
+    local function WatchProperty(prop)
+        self.Conns[prop] = L:GetPropertyChangedSignal(prop):Connect(function()
+            if S.FullBrightEnabled then
+                self.GameLighting[prop] = L[prop]
+                task.defer(function()
+                    if S.FullBrightEnabled then
+                        self:ApplyFullBright()
+                    end
+                end)
+            end
+        end)
     end
+
+    WatchProperty("Ambient")
+    WatchProperty("Brightness")
+    WatchProperty("ClockTime")
+    WatchProperty("FogEnd")
+    WatchProperty("GlobalShadows")
+
+    self.Conns.ChildAdded = L.ChildAdded:Connect(function()
+        if S.FullBrightEnabled then
+            task.defer(function()
+                self:CaptureGameState()
+                self:ApplyFullBright()
+            end)
+        end
+    end)
 end
+
+function FullBright:Cleanup()
+    for _, c in pairs(self.Conns) do
+        if c then
+            pcall(function()
+                c:Disconnect()
+            end)
+        end
+    end
+
+    self.Conns = {}
+end
+
 function FullBright:Remove()
     self:Cleanup()
-    if self.Orig.Ambient then
-        local L = Services.Lighting
-        L.Ambient=self.Orig.Ambient L.Brightness=self.Orig.Brightness
-        L.ClockTime=self.Orig.ClockTime L.FogEnd=self.Orig.FogEnd
-        L.GlobalShadows=self.Orig.GlobalShadows
-        self.Orig={}
+
+    local L = Services.Lighting
+
+    if self.GameLighting.Ambient then
+        L.Ambient = self.GameLighting.Ambient
     end
-    for _, fx in ipairs(Services.Lighting:GetChildren()) do
-        if fx:IsA("BloomEffect") then fx.Enabled=true end
+
+    if self.GameLighting.Brightness then
+        L.Brightness = self.GameLighting.Brightness
+    end
+
+    if self.GameLighting.ClockTime then
+        L.ClockTime = self.GameLighting.ClockTime
+    end
+
+    if self.GameLighting.FogEnd then
+        L.FogEnd = self.GameLighting.FogEnd
+    end
+
+    if self.GameLighting.GlobalShadows ~= nil then
+        L.GlobalShadows = self.GameLighting.GlobalShadows
+    end
+
+    for fx, data in pairs(self.EffectData) do
+        if fx and fx.Parent then
+
+            if fx:IsA("Atmosphere") then
+                for k, v in pairs(data) do
+                    pcall(function()
+                        fx[k] = v
+                    end)
+                end
+
+            elseif fx:IsA("ColorCorrectionEffect") then
+                for k, v in pairs(data) do
+                    pcall(function()
+                        fx[k] = v
+                    end)
+                end
+
+            elseif fx:IsA("BloomEffect") then
+                for k, v in pairs(data) do
+                    pcall(function()
+                        fx[k] = v
+                    end)
+                end
+            end
+        end
     end
 end
 
 local NoTex = {
-    Modes={"OFF","TEXTURES","MATERIALS","BOTH"}, Idx=1,
+    Selected = {
+        TEXTURES = false,
+        MATERIALS = false,
+        PARTICLES = false,
+        GUI = false,
+        LIGHTS = false,
+    },
+
     OrigT=setmetatable({},{__mode="k"}),
     OrigM=setmetatable({},{__mode="k"}),
+    OrigGui=setmetatable({},{__mode="k"}),
+    OrigFx=setmetatable({},{__mode="k"}),
+    OrigLgt=setmetatable({},{__mode="k"}),
+
     Conns={},
 }
+local VisualItems = {
+    {Key="TEXTURES",  Label="Textures"},
+    {Key="MATERIALS", Label="Materials"},
+    {Key="PARTICLES", Label="Particles"},
+    {Key="GUI",       Label="GUI"},
+    {Key="LIGHTS",    Label="Lights"},
+}
+
 function NoTex:ApplyObj(obj)
-    local mode = self.Modes[self.Idx]
-    if (mode=="TEXTURES" or mode=="BOTH") and (obj:IsA("Texture") or obj:IsA("Decal")) then
-        local p = obj.Parent
-        while p and p ~= workspace do
-            if p:FindFirstChildOfClass("Humanoid") then return end
-            p = p.Parent
+    local useTextures  = self.Selected.TEXTURES
+    local useMaterials = self.Selected.MATERIALS
+    local useParticles = self.Selected.PARTICLES
+    local useGui       = self.Selected.GUI
+    local useLights    = self.Selected.LIGHTS
+
+    local p = obj.Parent
+    while p and p ~= workspace do
+        if p:FindFirstChildOfClass("Humanoid") then
+            return
         end
-        if not self.OrigT[obj] then self.OrigT[obj]=obj.Transparency end
-        obj.Transparency = 1
+        p = p.Parent
     end
-    if (mode=="MATERIALS" or mode=="BOTH") and obj:IsA("BasePart") then
-        local p = obj.Parent
-        while p and p ~= workspace do
-            if p:FindFirstChildOfClass("Humanoid") then return end
-            p = p.Parent
+
+    -- TEXTURES
+
+    if useTextures then
+
+        if obj:IsA("Texture") or obj:IsA("Decal") then
+            if self.OrigT[obj] == nil then
+                self.OrigT[obj] = obj.Transparency
+            end
+
+            obj.Transparency = 1
+            return
         end
-        if not self.OrigM[obj] then self.OrigM[obj]=obj.Material end
+
+        if obj:IsA("MeshPart") and obj.TextureID ~= "" then
+            if self.OrigT[obj] == nil then
+                self.OrigT[obj] = obj.TextureID
+            end
+
+            obj.TextureID = ""
+            return
+        end
+    end
+
+    -- MATERIALS
+
+    if useMaterials and obj:IsA("BasePart") then
+        if self.OrigM[obj] == nil then
+            self.OrigM[obj] = obj.Material
+        end
+
         obj.Material = Enum.Material.SmoothPlastic
+        return
+    end
+
+    -- GUI
+
+    if useGui and (
+            obj:IsA("BillboardGui")
+            or obj:IsA("SurfaceGui")
+            or obj:IsA("ViewportFrame")
+        ) then
+
+        if self.OrigGui[obj] == nil then
+            self.OrigGui[obj] = obj.Enabled
+        end
+
+        obj.Enabled = false
+        return
+    end
+
+    -- PARTICLES
+
+    if useParticles and (
+        obj:IsA("ParticleEmitter")
+        or obj:IsA("Smoke")
+        or obj:IsA("Fire")
+        or obj:IsA("Sparkles")
+        or obj:IsA("Trail")
+        or obj:IsA("Beam")
+    ) then
+
+        if self.OrigFx[obj] == nil then
+            self.OrigFx[obj] = obj.Enabled
+        end
+
+        obj.Enabled = false
+        return
+    end
+
+    -- LIGHTS
+
+    if useLights and (
+        obj:IsA("PointLight")
+        or obj:IsA("SpotLight")
+        or obj:IsA("SurfaceLight")
+    ) then
+
+        if self.OrigLgt[obj] == nil then
+            self.OrigLgt[obj] = obj.Enabled
+        end
+
+        obj.Enabled = false
+        return
     end
 end
 function NoTex:RestoreAll()
-    for o,t in pairs(self.OrigT) do if o and o.Parent then o.Transparency=t end end
-    for o,m in pairs(self.OrigM) do if o and o.Parent then o.Material=m end end
-    self.OrigT=setmetatable({},{__mode="k"})
-    self.OrigM=setmetatable({},{__mode="k"})
+
+    for obj, value in pairs(self.OrigT) do
+        if obj then
+
+            if obj:IsA("Texture") or obj:IsA("Decal") then
+                if obj.Parent then
+                    obj.Transparency = value
+                end
+
+            elseif obj:IsA("MeshPart") then
+                if obj.Parent then
+                    obj.TextureID = value
+                end
+            end
+        end
+    end
+
+    for obj, value in pairs(self.OrigM) do
+        if obj and obj.Parent then
+            obj.Material = value
+        end
+    end
+
+    for obj, value in pairs(self.OrigGui) do
+        if obj and obj.Parent then
+            obj.Enabled = value
+        end
+    end
+
+    for obj, value in pairs(self.OrigFx) do
+        if obj and obj.Parent then
+            obj.Enabled = value
+        end
+    end
+
+    for obj, value in pairs(self.OrigLgt) do
+        if obj and obj.Parent then
+            obj.Enabled = value
+        end
+    end
+
+    self.OrigT   = setmetatable({}, {__mode="k"})
+    self.OrigM   = setmetatable({}, {__mode="k"})
+    self.OrigGui = setmetatable({}, {__mode="k"})
+    self.OrigFx  = setmetatable({}, {__mode="k"})
+    self.OrigLgt = setmetatable({}, {__mode="k"})
 end
 function NoTex:Cleanup()
-    for k, c in pairs(self.Conns) do
-        if c then pcall(function() c:Disconnect() end) end
-        self.Conns[k] = nil
+    for _, conn in pairs(self.Conns) do
+        if conn then
+            pcall(function()
+                conn:Disconnect()
+            end)
+        end
     end
+
+    self.Conns = {}
 end
-function NoTex:SetMode(idx)
-    self.Idx = idx
+function NoTex:Refresh()
+
     self:Cleanup()
     self:RestoreAll()
-    local mode = self.Modes[self.Idx]
-    if mode ~= "OFF" then
-        for _, o in ipairs(workspace:GetDescendants()) do self:ApplyObj(o) end
-        self.Conns.added = workspace.DescendantAdded:Connect(function(o)
-            if self.Idx > 1 then task.defer(function() self:ApplyObj(o) end) end
-        end)
-        self.Conns.removing = workspace.DescendantRemoving:Connect(function(o)
-            self.OrigT[o]=nil self.OrigM[o]=nil
-        end)
+
+    local enabled = false
+
+    for _, state in pairs(self.Selected) do
+        if state then
+            enabled = true
+            break
+        end
     end
+
+    if not enabled then
+        return
+    end
+
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        self:ApplyObj(obj)
+    end
+
+    self.Conns.added = workspace.DescendantAdded:Connect(function(obj)
+        task.defer(function()
+            self:ApplyObj(obj)
+        end)
+    end)
+
+    self.Conns.removing = workspace.DescendantRemoving:Connect(function(obj)
+
+        self.OrigT[obj] = nil
+        self.OrigM[obj] = nil
+        self.OrigGui[obj] = nil
+        self.OrigFx[obj] = nil
+        self.OrigLgt[obj] = nil
+
+    end)
 end
 
 local Tools = {
@@ -1978,57 +2204,8 @@ function SaveLoad:StartAutoLoop()
     end)
 end
 
--- ИСПРАВЛЕНО: HookHumanoid определён ДО CharacterAdded
-local function HookHumanoid(hum)
-    if not hum then return end
-    hum:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
-        -- Срабатывает ТОЛЬКО если Sync включён и Force Apply выключен
-        if S.GameSyncEnabled and not S.ForceApplyEnabled then
-            local newVal = hum.WalkSpeed
-            if math.abs(newVal - S.WalkSpeed) > 0.1 then
-                S.WalkSpeed = newVal
-                if UIRefs.Sliders["WalkSpeed"] then
-                    pcall(function() UIRefs.Sliders["WalkSpeed"]:Set(newVal, true) end)
-                end
-            end
-        end
-    end)
-    hum:GetPropertyChangedSignal("JumpPower"):Connect(function()
-        if S.GameSyncEnabled and not S.ForceApplyEnabled then
-            local newVal = hum.JumpPower
-            if math.abs(newVal - S.JumpPower) > 0.1 then
-                S.JumpPower = newVal
-                if UIRefs.Sliders["JumpPower"] then
-                    pcall(function() UIRefs.Sliders["JumpPower"]:Set(newVal, true) end)
-                end
-            end
-        end
-    end)
-end
-
--- Хук на FOV камеры
-local function HookCamera(cam)
-    if not cam then return end
-    cam:GetPropertyChangedSignal("FieldOfView"):Connect(function()
-        if S.GameSyncEnabled and not S.ForceApplyEnabled and cam == workspace.CurrentCamera then
-            local newVal = cam.FieldOfView
-            if math.abs(newVal - S.CameraFOV) > 0.1 then
-                S.CameraFOV = newVal
-                if UIRefs.Sliders["CameraFOV"] then
-                    pcall(function() UIRefs.Sliders["CameraFOV"]:Set(newVal, true) end)
-                end
-            end
-        end
-    end)
-end
-
-HookCamera(workspace.CurrentCamera)
--- Подключаем хук к humanoid при старте (уже существующий персонаж)
-if humanoid then HookHumanoid(humanoid) end
-
 workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
     Camera = workspace.CurrentCamera
-    HookCamera(workspace.CurrentCamera)
 end)
 
 local function TrackCharacter(chr, player)
@@ -2077,10 +2254,6 @@ LocalPlayer.CharacterAdded:Connect(function(nc)
     char=nc root=nc:WaitForChild("HumanoidRootPart",5)
     humanoid=nc:WaitForChild("Humanoid",5)
     task.wait(0.5)
-    -- ИСПРАВЛЕНО: HookHumanoid уже определена выше, вызов работает
-    if humanoid then
-        HookHumanoid(humanoid)
-    end
     UpdateCharCache(nc)
     ApplyAntiStates()
     if S.FlyEnabled then SetFly(true) end
@@ -2213,14 +2386,17 @@ function Main:GetClosest()
                     local part = c:FindFirstChild(S.TargetPart)
                     local hum  = c:FindFirstChildOfClass("Humanoid")
                     if part and hum and hum.Health > 0 then
-                        local inHB = S.HitboxEnabled and Hitbox:IsInside(part.Position)
-                        local pos, on = Camera:WorldToViewportPoint(part.Position)
-                        if on then
-                            local d = (Vector2.new(pos.X,pos.Y)-center).Magnitude
-                            if inHB then if d<bestDist then bestDist=d best=c end
-                            elseif d<bestDist and (S.ThroughWalls or IsVisible(part)) then bestDist=d best=c end
+                    local pos, on = Camera:WorldToViewportPoint(part.Position)
+
+                    if on then
+                        local d = (Vector2.new(pos.X, pos.Y) - center).Magnitude
+
+                        if d < bestDist and (S.ThroughWalls or IsVisible(part)) then
+                            bestDist = d
+                            best = c
                         end
                     end
+                end
                 end
             end
         end
@@ -2302,7 +2478,7 @@ function Main:Destroy()
     Services.UserInputService.MouseDeltaSensitivity=1
     if R.AntiSlipConn then R.AntiSlipConn:Disconnect() R.AntiSlipConn=nil end
     SetWaterBlock(false)
-    ESP:Destroy() Hitbox:Destroy() NPCTracker:Destroy()
+    ESP:Destroy() NPCTracker:Destroy()
     FullBright:Remove() Xray:Remove() NoTex:RestoreAll() NoTex:Cleanup()
     SetForceSpeed(false) SetShiftLock(false)
     if R.FlyBV then pcall(function() R.FlyBV:Destroy() end) R.FlyBV = nil end
@@ -2585,27 +2761,29 @@ NPCESPTab:CreateColorPicker({
     end
 })
 
-local HitboxTab = Window:CreateTab("Hitbox Map")
-CreateFixedToggle(HitboxTab, "Hitbox Map", "HitboxEnabled", function(v) Hitbox:UpdateVisual() end)
-HitboxTab:CreateButton({Name="Select Map Model", Callback=function() Hitbox:StartSelection() end})
-CreateFixedToggle(HitboxTab, "Show Hitbox", "HitboxVisible", function(v) Hitbox:UpdateVisual() end)
-CreateFixedSlider(HitboxTab, "Hitbox Radius", "HitboxSize", 5, 200, "%d")
-HitboxTab:CreateButton({Name="Auto Detect", Callback=function() Hitbox:AutoDetect() end})
-HitboxTab:CreateButton({Name="Clear Selection", Callback=function()
-    S.HitboxModel=nil Hitbox:ClearVisual() Notify("Hitbox","Selection cleared",2)
-end})
-
 local WorldTab = Window:CreateTab("World")
 CreateFixedToggle(WorldTab, "XRay Vision", "XrayEnabled", function(v) SetXray(v) end)
 CreateFixedToggle(WorldTab, "Xray Players", "XrayPlayers", function(v) SetXrayPlayers(v) end)
 CreateFixedToggle(WorldTab, "Full Bright", "FullBrightEnabled", function(v) SetFullBright(v) end)
-WorldTab:CreateDropdown({
-    Name="Remove Textures", Options={"OFF","TEXTURES","MATERIALS","BOTH"}, Default="OFF",
-    Callback=function(v)
-        for i, m in ipairs(NoTex.Modes) do
-            if m==v then NoTex:SetMode(i) break end
-        end
-    end
+WorldTab:CreateSection("Visual Remover")
+WorldTab:CreateAntiThingManager({
+    Items = VisualItems,
+    States = NoTex.Selected,
+
+    OnAdd = function(key)
+        NoTex.Selected[key] = true
+        NoTex:Refresh()
+    end,
+
+    OnRemove = function(key)
+        NoTex.Selected[key] = false
+        NoTex:Refresh()
+    end,
+
+    OnToggle = function(key, val)
+        NoTex.Selected[key] = val
+        NoTex:Refresh()
+    end,
 })
 WorldTab:CreateDivider()
 WorldTab:CreateSection("Force Speed")
@@ -2627,32 +2805,28 @@ CreateFixedToggle(WorldTab, "Force Speed", "ForceSpeedEnabled", function(v) SetF
 WorldTab:CreateDivider()
 WorldTab:CreateSection("Shift Lock Unlocker")
 WorldTab:CreateActionButton({
-    Name="Unlock Shift Lock", Cooldown=1.5,
+    Name="Unlock Shift Lock",
+    Cooldown=1.5,
     NotifyTitle="Shift Lock",
+
     Callback=function()
-        local wasLocked = (LocalPlayer.DevEnableMouseLock == false)
-        local ok = pcall(function() LocalPlayer.DevEnableMouseLock = true end)
-        if not ok then Notify("Shift Lock","! Failed to unlock",4) return false end
-        if wasLocked then Notify("Shift Lock","! Unlocked! Shift key now works",4)
-        else Notify("Shift Lock","! Already unlocked",3) end
-        if not R.ShiftPCConn and not isMobile then
-            R.ShiftPCConn = Services.UserInputService.InputBegan:Connect(function(input, gp)
-                if gp then return end
-                if input.KeyCode==Enum.KeyCode.LeftShift or input.KeyCode==Enum.KeyCode.RightShift then
-                    ToggleShiftLockState()
-                end
-            end)
+
+        if LocalPlayer.DevEnableMouseLock == true then
+            Notify("Shift Lock", "Already enabled", 3)
+            return true
         end
-        if isMobile and not R.MobileShiftBtn then
-            CreateMobileShiftButton()
-            pcall(function()
-                Services.ContextActionService:BindAction("DivaShiftLock", function(_, state)
-                    if state==Enum.UserInputState.Begin then ToggleShiftLockState() end
-                end, false, "On")
-                R.MobileShiftCASBound=true
-            end)
+
+        local ok = pcall(function()
+            LocalPlayer.DevEnableMouseLock = true
+        end)
+
+        if ok then
+            Notify("Shift Lock", "Unlocked successfully", 4)
+            return true
+        else
+            Notify("Shift Lock", "Failed to unlock", 4)
+            return false
         end
-        return true
     end
 })
 WorldTab:CreateDivider()
@@ -2805,40 +2979,22 @@ CreateFixedSlider(CharTab, "Size Y", "ScaffoldY", 0.5, 10, "%.1f")
 CreateFixedSlider(CharTab, "Size Z", "ScaffoldZ", 1, 10, "%.1f")
 
 CharTab:CreateDivider()
-CharTab:CreateSection("GAME SYNC & FORCE APPLY")
-CharTab:CreateLabel({Text="LSWG: слайдеры обновляются когда игра меняет значения\nForce Apply: постоянно применяет твои значения\nОни несовместимы между собой!", Wrapped=true})
+local forceToggle
 
--- ИСПРАВЛЕНО: syncToggle и forceToggle без дублирования,
--- с правильной взаимоблокировкой через SetForceApply
-local syncToggle, forceToggle
+forceToggle = CreateFixedToggle(
+    CharTab,
+    "Force Apply Stats",
+    "ForceApplyEnabled",
+    function(v)
+        SetForceApply(v)
 
-syncToggle = CreateFixedToggle(CharTab, "Live Sync With Game (LSWG)", "GameSyncEnabled", function(v)
-    if v and S.ForceApplyEnabled then
-        -- Откатываем обратно
-        S.GameSyncEnabled = false
-        pcall(function() syncToggle:Set(false, true) end)
-        Notify("Conflict", "Нельзя включить Live Sync пока Force Apply ON!", 3)
-        return
+        if v then
+            Notify("Force Apply",
+                "Stat locked to your values",
+                2)
+        end
     end
-    if v then
-        Notify("Game Sync", "Теперь следит за изменениями скорости/прыжка в игре", 2)
-    end
-end)
-
-forceToggle = CreateFixedToggle(CharTab, "Force Apply Stats", "ForceApplyEnabled", function(v)
-    if v and S.GameSyncEnabled then
-        -- Откатываем обратно
-        S.ForceApplyEnabled = false
-        pcall(function() forceToggle:Set(false, true) end)
-        Notify("Conflict", "Нельзя включить Force Apply пока Live Sync ON!", 3)
-        return
-    end
-    -- Вызываем SetForceApply который реально подключает/отключает хартбит
-    SetForceApply(v)
-    if v then
-        Notify("Force Apply", "Стат заблокирован на твоих значениях", 2)
-    end
-end)
+)
 
 CharTab:CreateButton({
     Name = "Reset Values From Game",
